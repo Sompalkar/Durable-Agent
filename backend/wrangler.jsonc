@@ -1,0 +1,110 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "agent-durable-object",
+	"main": "src/index.ts",
+	"compatibility_date": "2025-06-01",
+	"compatibility_flags": ["nodejs_compat"],
+
+	"observability": {
+		"enabled": true
+	},
+
+	"durable_objects": {
+		"bindings": [
+			{ "name": "AGENT_SESSION", "class_name": "AgentSessionDO" },
+			{ "name": "WORKSPACE", "class_name": "WorkspaceDO" },
+			{ "name": "SESSION_REGISTRY", "class_name": "SessionRegistryDO" },
+			{ "name": "BRAIN", "class_name": "BrainDO" },
+			{ "name": "SCHEDULER", "class_name": "SchedulerDO" }
+			// To enable the Cloudflare shell, add:
+			// { "name": "Sandbox", "class_name": "Sandbox" }
+		]
+	},
+
+	// SQLite-backed Durable Objects. This is what replaces the sandbox:
+	// each object owns a real SQLite database that survives eviction.
+	"migrations": [
+		{
+			"tag": "v1",
+			"new_sqlite_classes": ["AgentSessionDO", "WorkspaceDO", "SessionRegistryDO"]
+		},
+		{
+			"tag": "v2",
+			"new_sqlite_classes": ["BrainDO", "SchedulerDO"]
+		}
+		// To enable the Cloudflare shell, add:
+		// { "tag": "v3", "new_sqlite_classes": ["Sandbox"] }
+	],
+
+	// ---------------------------------------------------------------------
+	// Optional: a real Linux shell, on Cloudflare.
+	//
+	// `Sandbox` from @cloudflare/sandbox is a Durable Object with a container
+	// attached — the object is the handle, the container does the work, and it
+	// sleeps when idle. Enabling it requires the Workers Paid plan, and Docker
+	// running locally for `wrangler dev`.
+	//
+	// To turn it on:
+	//   1. uncomment the "containers" block and the Sandbox binding below
+	//   2. add the v3 migration above
+	//   3. uncomment the `export { Sandbox }` line in src/index.ts
+	//   4. set SANDBOX_PROVIDER to "cloudflare"
+	//
+	// "containers": [
+	//   {
+	//     "class_name": "Sandbox",
+	//     "image": "./Dockerfile",
+	//     "instance_type": "lite",
+	//     "max_instances": 3
+	//   }
+	// ],
+	// ---------------------------------------------------------------------
+
+	"vars": {
+		// Defaults for a NEW session. Both are overridable per session from the
+		// model picker in the UI, so this only sets where you start.
+		//
+		// Cheapest by default on purpose: testing an agent means many turns, and
+		// an agentic loop multiplies every one. Switch to Opus for the demo.
+		"AGENT_MODEL": "claude-haiku-4-5",
+		"AGENT_EFFORT": "low",
+
+		// Comma-separated allowlist. Must name real origins rather than "*",
+		// because the browser refuses to send the session cookie to a wildcard.
+		"ALLOWED_ORIGIN": "http://localhost:3000",
+
+		// The main backend (Node + MongoDB). The Worker calls it to archive turns
+		// and mirror the session list. Leave empty to run the agent standalone,
+		// with no accounts and no history.
+		"MAIN_API_URL": "http://localhost:4000",
+
+		// Demo guard rails. Both are off when 0. Set them before sharing a public
+		// link, or anyone who opens it can spend your API budget.
+		"DEMO_TURN_LIMIT": "25",
+		"DEMO_HOURLY_TURN_LIMIT": "60",
+
+		// Background agents. A schedule the agent creates itself starts paused and
+		// needs your approval — an agent that can schedule itself unattended is the
+		// fastest way to wake up to a surprise bill.
+		"AGENT_SCHEDULES_NEED_APPROVAL": "true",
+		// Hard ceiling on how many times any one schedule may ever fire.
+		"SCHEDULE_MAX_RUNS": "20",
+
+		// Optional Linux shell for `run_command`. Leave empty and the agent
+		// simply has no shell — everything else still works.
+		//   "daytona"    → third-party sandbox, needs only DAYTONA_API_KEY.
+		//                  Easiest path to a working shell locally.
+		//   "cloudflare" → container attached to a Durable Object. Needs the
+		//                  container config above, Workers Paid, and Docker.
+		"SANDBOX_PROVIDER": "daytona",
+		"DAYTONA_API_URL": "https://app.daytona.io/api",
+		"DAYTONA_TOOLBOX_URL": "https://proxy.app.daytona.io",
+		"DAYTONA_TARGET": "us",
+		"DAYTONA_SNAPSHOT": "",
+		"DAYTONA_ORG_ID": "",
+
+		// Minutes a sandbox may sit idle before the provider stops it. This is
+		// only a safety net — the session disposes its sandbox when a turn ends.
+		"SANDBOX_IDLE_MINUTES": "5"
+	}
+}

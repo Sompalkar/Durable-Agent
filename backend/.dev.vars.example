@@ -1,0 +1,18 @@
+# Required — the agent cannot run without this.
+ANTHROPIC_API_KEY="sk-ant-your-key-here"
+
+# Required for accounts. Both must be byte-identical to the values in api/.env,
+# because they are the only thing making the two services trust each other:
+#
+#   AUTH_JWT_SECRET  the API signs the session cookie, the Worker verifies it
+#   SERVICE_TOKEN    the Worker calls back to archive turns, the API checks it
+#
+# Leave them empty to run the agent standalone — no accounts, no saved history.
+# The Worker fails closed: given a cookie but no secret it returns 500 rather
+# than letting the request through unauthenticated.
+AUTH_JWT_SECRET=""
+SERVICE_TOKEN=""
+
+# Optional — only needed if SANDBOX_PROVIDER is set to "daytona" in wrangler.jsonc.
+# Without it the agent simply has no shell; every other feature still works.
+DAYTONA_API_KEY=""
