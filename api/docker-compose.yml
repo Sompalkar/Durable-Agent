@@ -1,0 +1,25 @@
+# Local MongoDB for development.
+#
+# Swap to Atlas by setting MONGODB_URI in .env — nothing in the code changes,
+# and this file simply stops being used.
+#
+#   npm run db:up     start
+#   npm run db:down   stop
+
+services:
+  mongo:
+    image: mongo:8
+    container_name: durable-agent-mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  mongo-data:
