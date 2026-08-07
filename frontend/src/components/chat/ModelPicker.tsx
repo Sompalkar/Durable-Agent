@@ -20,6 +20,22 @@ const TIER_TONE: Record<ModelOption["tier"], string> = {
   "most capable": "text-accent",
 };
 
+/**
+ * Routing, offered as if it were a model.
+ *
+ * It is a strategy, not a model — but from the picker's point of view it is
+ * simply another thing a session can run on, and describing it as a separate
+ * concept would make the control harder to use, not more honest.
+ */
+const AUTO: ModelOption = {
+  id: "auto",
+  label: "Auto",
+  blurb: "Starts on Haiku and moves up only when a step actually fails.",
+  inputPerMTok: 1,
+  outputPerMTok: 5,
+  tier: "cheapest",
+};
+
 export function ModelPicker({
   models,
   efforts,
@@ -98,7 +114,7 @@ export function ModelPicker({
           </div>
 
           <ul>
-            {models.map((option) => (
+            {[AUTO, ...models].map((option) => (
               <li key={option.id}>
                 <button
                   onClick={() => {

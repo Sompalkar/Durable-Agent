@@ -11,7 +11,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import type { AgentEvent, PlanStep, Proposal, ToolRecord, TurnUsage } from '../types';
 import type { Memory, Skill } from '../durable-objects/brain-do';
 import { DEFAULT_PRUNE, estimateTokens, pruneContext } from './context';
-import { findModel } from './models';
+import { findModel, isRouted, modelForStep } from './models';
 import { buildContextBlock, SYSTEM_PROMPT } from './system-prompt';
 import { executeTool, type ToolContext } from './tool-runtime';
 import { BRAIN_TOOLS, buildToolDefinitions, MUTATING_TOOLS } from './tools';
@@ -56,6 +56,14 @@ export interface RunResult {
 	plan: PlanStep[];
 	usage: TurnUsage;
 	stopReason: string | null;
+	/**
+	 * Tokens attributed to each model that ran this turn.
+	 *
+	 * A routed turn uses more than one, and they bill at different rates, so a
+	 * single total would be unpriceable. This is what makes the saving a number
+	 * rather than a claim.
+	 */
+	usageByModel: Record<string, TurnUsage>;
 }
 
 export async function runAgentTurn(options: RunOptions): Promise<RunResult> {
@@ -69,6 +77,13 @@ export async function runAgentTurn(options: RunOptions): Promise<RunResult> {
 	let assistantText = '';
 	let stopReason: string | null = null;
 
+	// Routing state. `escalations` only ever goes up: once a turn has shown it
+	// needs the stronger model, dropping back would just re-learn that lesson at
+	// the user's expense.
+	const routed = isRouted(model);
+	let escalations = 0;
+	const usageByModel: Record<string, TurnUsage> = {};
+
 	const toolDefinitions = buildToolDefinitions({ sandbox: context.sandbox !== null });
 	const contextBlock = buildContextBlock({
 		memories: options.memories,
@@ -78,16 +93,6 @@ export async function runAgentTurn(options: RunOptions): Promise<RunResult> {
 		sandboxAvailable: context.sandbox !== null,
 		sandboxName: context.sandbox?.name,
 	});
-
-	// Older models reject `thinking` and `effort`; newer ones want both. Build
-	// the optional half of the request from what this model actually accepts.
-	const capabilities = findModel(model);
-	const thinkingParams = capabilities?.supportsAdaptiveThinking
-		? ({ thinking: { type: 'adaptive', display: 'summarized' } } as const)
-		: {};
-	const effortParams = capabilities?.supportsEffort
-		? ({ output_config: { effort: effort as 'low' | 'medium' | 'high' | 'xhigh' | 'max' } } as const)
-		: {};
 
 	emit({ type: 'turn_start' });
 
@@ -101,8 +106,22 @@ export async function runAgentTurn(options: RunOptions): Promise<RunResult> {
 			);
 		}
 
+		// Resolved per iteration, because a routed turn can change model mid-loop.
+		const stepModel = routed ? modelForStep(escalations) : model;
+
+		// Older models reject `thinking` and `effort`; newer ones want both. Built
+		// from what this model actually accepts — sending `effort` to Haiku is a
+		// 400, not a no-op.
+		const capabilities = findModel(stepModel);
+		const thinkingParams = capabilities?.supportsAdaptiveThinking
+			? ({ thinking: { type: 'adaptive', display: 'summarized' } } as const)
+			: {};
+		const effortParams = capabilities?.supportsEffort
+			? ({ output_config: { effort: effort as 'low' | 'medium' | 'high' | 'xhigh' | 'max' } } as const)
+			: {};
+
 		const stream = client.messages.stream({
-			model,
+			model: stepModel,
 			max_tokens: MAX_TOKENS,
 			...thinkingParams,
 			...effortParams,
@@ -135,6 +154,9 @@ export async function runAgentTurn(options: RunOptions): Promise<RunResult> {
 		stopReason = message.stop_reason;
 		accumulateUsage(usage, message.usage);
 
+		usageByModel[stepModel] ??= { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 };
+		accumulateUsage(usageByModel[stepModel], message.usage);
+
 		const assistantMessage: Anthropic.MessageParam = {
 			role: 'assistant',
 			content: message.content,
@@ -158,7 +180,7 @@ export async function runAgentTurn(options: RunOptions): Promise<RunResult> {
 			toolUses.map(async (toolUse) => {
 				emit({ type: 'tool_call', id: toolUse.id, name: toolUse.name, input: toolUse.input });
 				const startedAt = Date.now();
-				const outcome = await executeTool(toolUse.name, toolUse.input, context);
+				const outcome = await executeTool(toolUse.name, toolUse.input, context, toolUse.id);
 				return { toolUse, outcome, durationMs: Date.now() - startedAt };
 			}),
 		);
@@ -200,6 +222,19 @@ export async function runAgentTurn(options: RunOptions): Promise<RunResult> {
 			});
 		}
 
+		// Escalate on evidence, not on a guess. A failed tool call is the cheap
+		// model telling us it got something wrong — a bad path, a stale edit
+		// target, a command that did not exist. That is exactly the point at
+		// which paying more starts to be worth it.
+		if (routed && outcomes.some(({ outcome }) => !outcome.ok)) {
+			const before = modelForStep(escalations);
+			escalations += 1;
+			const after = modelForStep(escalations);
+			if (after !== before) {
+				console.log(`routing: escalated ${before} → ${after} after a failed tool call`);
+			}
+		}
+
 		if (workspaceChanged) emit({ type: 'workspace_changed' });
 		if (brainChanged) emit({ type: 'brain_changed' });
 		if (scheduleChanged) emit({ type: 'schedule_changed' });
@@ -220,6 +255,7 @@ export async function runAgentTurn(options: RunOptions): Promise<RunResult> {
 		proposals,
 		plan: [...context.plan],
 		usage,
+		usageByModel,
 		stopReason,
 	};
 }

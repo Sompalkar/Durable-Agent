@@ -275,7 +275,11 @@ export const api = {
   // ------------------------------------------------------------- sessions
 
   /** The model catalogue the picker renders. */
-  models(): Promise<{ models: ModelOption[]; efforts: string[] }> {
+  models(): Promise<{
+    models: ModelOption[];
+    efforts: string[];
+    auto?: { id: string; label: string; blurb: string };
+  }> {
     return request("/api/sessions/models");
   },
 

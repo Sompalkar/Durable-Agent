@@ -11,7 +11,7 @@
  */
 
 import { Hono } from 'hono';
-import { EFFORT_LEVELS, MODELS } from '../agent/models';
+import { AUTO_MODEL, EFFORT_LEVELS, MODELS } from '../agent/models';
 import { fetchBudget, registerSession, updateSession } from '../auth/api-client';
 import { authenticate, type AuthEnv } from '../auth/middleware';
 import { ApiError } from '../http/errors';
@@ -20,7 +20,18 @@ import { registryStub, sessionStub, workspaceStub } from '../http/stubs';
 export const sessionRoutes = new Hono<AuthEnv>();
 
 /** GET /api/sessions/models — what the picker offers, with prices. */
-sessionRoutes.get('/models', (c) => c.json({ models: MODELS, efforts: EFFORT_LEVELS }));
+sessionRoutes.get('/models', (c) =>
+	c.json({
+		models: MODELS,
+		efforts: EFFORT_LEVELS,
+		/** Not a model — a strategy. Offered alongside them in the picker. */
+		auto: {
+			id: AUTO_MODEL,
+			label: 'Auto',
+			blurb: 'Starts cheap and moves up only when a step actually fails.',
+		},
+	}),
+);
 
 // Everything below this line needs a signed-in user.
 sessionRoutes.use('*', authenticate);

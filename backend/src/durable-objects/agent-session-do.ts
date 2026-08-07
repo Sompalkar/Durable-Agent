@@ -18,7 +18,13 @@ import { fetchBudget, fetchGitHubToken, reportTurn } from '../auth/api-client';
 import { describeAgentError } from '../agent/errors';
 import { addUsage, EMPTY_USAGE, estimateCostUsd } from '../agent/pricing';
 import { runAgentTurn } from '../agent/runner';
-import { DEFAULT_EFFORT, DEFAULT_MODEL, isValidEffort, isValidModel } from '../agent/models';
+import {
+	DEFAULT_EFFORT,
+	DEFAULT_MODEL,
+	isSelectableModel,
+	isValidEffort,
+	isValidModel,
+} from '../agent/models';
 import { createSandbox } from '../agent/sandbox';
 import type { CommandRecord, RepoContext, ToolContext } from '../agent/tool-runtime';
 import type {
@@ -130,7 +136,7 @@ export class AgentSessionDO extends DurableObject<Env> {
 			// Validated rather than trusted: these arrive from a browser, and an
 			// unknown model would fail at the API with a much worse error than
 			// quietly falling back to the deployment default.
-			if (options.model && isValidModel(options.model)) {
+			if (options.model && isSelectableModel(options.model)) {
 				this.setMeta('model', options.model);
 			}
 			if (options.effort && isValidEffort(options.effort)) {
@@ -210,7 +216,7 @@ export class AgentSessionDO extends DurableObject<Env> {
 	/** The model this session runs on. Falls back to the deployment default. */
 	private model(): string {
 		const stored = this.getMeta('model');
-		if (stored && isValidModel(stored)) return stored;
+		if (stored && isSelectableModel(stored)) return stored;
 		const configured = this.env.AGENT_MODEL || '';
 		return isValidModel(configured) ? configured : DEFAULT_MODEL;
 	}
@@ -225,7 +231,7 @@ export class AgentSessionDO extends DurableObject<Env> {
 	/** Switch model or effort mid-session — takes effect on the next turn. */
 	async configure(options: { model?: string; effort?: string }): Promise<SessionSummary> {
 		if (options.model !== undefined) {
-			if (!isValidModel(options.model)) throw new Error(`Unknown model: ${options.model}`);
+			if (!isSelectableModel(options.model)) throw new Error(`Unknown model: ${options.model}`);
 			this.setMeta('model', options.model);
 		}
 		if (options.effort !== undefined) {
@@ -469,7 +475,14 @@ export class AgentSessionDO extends DurableObject<Env> {
 			this.ctx.storage.sql.exec("DELETE FROM meta WHERE key = 'sandboxId'");
 		}
 
-		this.setUsage(addUsage(this.getUsage(), result.usage, model));
+		// Priced per model, then summed. A routed turn runs on more than one, and
+		// they bill at different rates — costing the whole turn at a single rate
+		// would be wrong in whichever direction the routing went.
+		let running = this.getUsage();
+		for (const [ranOn, tokens] of Object.entries(result.usageByModel)) {
+			running = addUsage(running, tokens, ranOn);
+		}
+		this.setUsage(running);
 		this.setMeta('proposals', JSON.stringify(result.proposals));
 		this.setMeta('plan', JSON.stringify(result.plan));
 		this.setMeta('changedPaths', JSON.stringify([...context.changedPaths]));
@@ -497,7 +510,10 @@ export class AgentSessionDO extends DurableObject<Env> {
 				model,
 				usage: {
 					...result.usage,
-					estimatedCostUsd: estimateCostUsd(model, result.usage),
+					estimatedCostUsd: Object.entries(result.usageByModel).reduce(
+						(total, [ranOn, tokens]) => total + estimateCostUsd(ranOn, tokens),
+						0,
+					),
 				},
 				trigger,
 				messageCount: summary.messageCount,
