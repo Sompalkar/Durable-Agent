@@ -230,6 +230,44 @@ because the point is watching it advance while the agent works. It shows up as a
 strip above the composer, which opens itself during a turn and closes when the
 work is done.
 
+### Live command output
+
+Daytona's execute endpoint is request/response — it returns when the command
+finishes, so there is nothing to subscribe to. The way around that is to stop
+running the command in the foreground: launch it detached with its output
+redirected to a file, then poll that file for the bytes written since the last
+check.
+
+Each poll returns only new bytes, so the cost scales with how much a command
+prints rather than with how long it takes. A single call fetches both the new
+output and whether the process has exited, because two calls would double the
+polling cost for no extra information.
+
+Streaming is opt-in per call. A scheduled run has nobody watching, and paying
+for round trips to an empty room is waste.
+
+### Model routing
+
+`Auto` is not a model, it is a strategy: start on the cheap tier and move up
+only when the cheap tier shows it is struggling.
+
+The trigger is **a failed tool call** — a bad path, a stale edit target, a
+command that did not exist. That is evidence, where guessing difficulty from the
+prompt is not. Escalation is monotonic within a turn: once the turn has proved it
+needs the better model, it does not drop back and re-learn that.
+
+Because a routed turn runs on more than one model, and they bill at different
+rates, usage is tracked **per model** and priced separately. Costing the whole
+turn at a single rate would be wrong in whichever direction the routing went.
+
+Observed on a task that fumbles once:
+
+```
+read_file  → FileNotFoundError
+routing: escalated claude-haiku-4-5 → claude-sonnet-5 after a failed tool call
+write_file → wrote /config.ts
+```
+
 ### Context pruning
 
 The API is stateless, so every loop iteration resends the whole conversation.
