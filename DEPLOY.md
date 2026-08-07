@@ -87,6 +87,8 @@ Check it: `curl https://YOUR-WORKER/api/health`
 ## 5. Vercel — the frontend
 
 ```bash
+npm i -g vercel      # the CLI is not bundled with npm
+vercel login
 cd frontend
 vercel
 ```
