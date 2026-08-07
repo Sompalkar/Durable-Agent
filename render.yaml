@@ -1,0 +1,34 @@
+# Render blueprint for the main API.
+#
+# Only the API lives here. The agent runs on Cloudflare Workers and the frontend
+# on Vercel — see DEPLOY.md.
+#
+# The free plan spins a service down after ~15 minutes of inactivity, and the
+# first request afterwards pays a cold start. The Worker's cron trigger pings
+# /health every ten minutes to prevent that; see triggers.crons in
+# backend/wrangler.jsonc.
+services:
+  - type: web
+    name: durable-agent-api
+    runtime: node
+    plan: free
+    rootDir: api
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # Render provides PORT; env.ts reads it.
+      - key: MONGODB_URI
+        sync: false   # set in the dashboard — it holds a password
+      - key: MONGODB_DB
+        value: durable_agent
+      - key: AUTH_JWT_SECRET
+        sync: false   # must match the Worker's secret exactly
+      - key: SERVICE_TOKEN
+        sync: false   # must match the Worker's secret exactly
+      - key: SIGNUP_CREDITS_USD
+        value: "2"
+      - key: CORS_ORIGINS
+        sync: false   # the Vercel URL, once it exists
