@@ -22,6 +22,7 @@ import type {
   CommandRecord,
   GitHubIssueOption,
   GitHubRepoOption,
+  WatchedPullRequest,
   ArchivedTurn,
   AuthUser,
   BrainSnapshot,
@@ -198,6 +199,7 @@ export const api = {
     changedPaths: string[];
     commands: CommandRecord[];
     knowledge: Memory[];
+    pullRequest: WatchedPullRequest | null;
   }> {
     return request(`/api/sessions/${sessionId}/github`);
   },

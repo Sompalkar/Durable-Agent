@@ -106,6 +106,14 @@ export interface CommandRecord {
   durationMs: number;
 }
 
+/** A pull request this session opened and is now watching. */
+export interface WatchedPullRequest {
+  number: number;
+  url: string;
+  branch: string;
+  reviewedThrough: string | null;
+}
+
 export interface GitHubRepoOption {
   fullName: string;
   private: boolean;

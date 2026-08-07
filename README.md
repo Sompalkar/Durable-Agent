@@ -180,6 +180,34 @@ one who knows it was not.
 Opening the PR is an explicit user action with a preview. An agent that can push
 to someone's repository unattended is not a feature.
 
+### The review loop
+
+Opening a pull request is not the end of the task. The session stores the PR and
+arms a schedule that polls it every ten minutes for new review comments.
+
+When one appears, the alarm wakes the session. There is nothing to resume — the
+container that built the diff was destroyed the moment that turn ended, possibly
+days earlier. Instead the diff is rebuilt from the Durable Object's own record of
+which files changed, a fresh checkout is made underneath it, the comment is
+addressed, and a commit is pushed to the same branch.
+
+```
+Mon  agent opens PR, container destroyed
+Tue  reviewer comments
+     alarm fires → diff rebuilt from SQLite → fix → push → reply
+```
+
+Two details that matter:
+
+- **Comments are marked read before the work, not after.** A turn that crashes
+  halfway must not answer the same review on every subsequent alarm. A missed
+  comment is recoverable; an infinite loop against a paid API is not.
+- **The agent's own comments are filtered out**, or it would reply to itself
+  forever.
+
+A review watcher is a schedule with `kind: 'review'` and no prompt of its own —
+the reviewer writes the prompt, every time it fires.
+
 ### Authentication
 
 Email and password, hashed with bcrypt, exchanged for a JWT in an httpOnly

@@ -9,7 +9,12 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { api } from "./api";
-import type { AttachedRepo, CommandRecord, Memory } from "./types";
+import type {
+  AttachedRepo,
+  CommandRecord,
+  Memory,
+  WatchedPullRequest,
+} from "./types";
 
 export interface RepoState {
   repo: AttachedRepo | null;
@@ -17,6 +22,8 @@ export interface RepoState {
   commands: CommandRecord[];
   /** What the agent has learned about this codebase, across every task on it. */
   knowledge: Memory[];
+  /** Set once a PR is open; the agent polls it for review comments. */
+  pullRequest: WatchedPullRequest | null;
   loading: boolean;
   error: string | null;
   refresh: () => void;
@@ -30,6 +37,7 @@ export function useRepo(sessionId: string): RepoState {
   const [changedPaths, setChangedPaths] = useState<string[]>([]);
   const [commands, setCommands] = useState<CommandRecord[]>([]);
   const [knowledge, setKnowledge] = useState<Memory[]>([]);
+  const [pullRequest, setPullRequest] = useState<WatchedPullRequest | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
@@ -47,6 +55,7 @@ export function useRepo(sessionId: string): RepoState {
         setChangedPaths(state.changedPaths);
         setCommands(state.commands);
         setKnowledge(state.knowledge);
+        setPullRequest(state.pullRequest);
         setError(null);
       } catch (cause) {
         if (controller.signal.aborted) return;
@@ -101,6 +110,7 @@ export function useRepo(sessionId: string): RepoState {
     changedPaths,
     commands,
     knowledge,
+    pullRequest,
     loading,
     error,
     refresh,

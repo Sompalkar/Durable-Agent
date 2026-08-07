@@ -120,6 +120,24 @@ export function RepoStrip({
           </Button>
         </div>
 
+        {/* Once a PR is open the session keeps working: an alarm polls it for
+            review comments and pushes fixes, long after the container that
+            built the diff has been destroyed. */}
+        {repo.pullRequest ? (
+          <a
+            href={repo.pullRequest.url}
+            target="_blank"
+            rel="noreferrer noopener"
+            className="flex items-center gap-1.5 rounded-lg border border-positive/25 bg-positive/10 px-2 py-1.5 text-[11px] text-positive transition-colors hover:border-positive/40"
+          >
+            <span className="pulse-dot h-1.5 w-1.5 shrink-0 rounded-full bg-positive" />
+            <span className="min-w-0 flex-1 truncate">
+              Watching #{repo.pullRequest.number} for review comments
+            </span>
+            <span className="shrink-0 font-mono opacity-70">open ↗</span>
+          </a>
+        ) : null}
+
         {/* What the agent has worked out about this codebase. Shown here rather
             than in the Memory tab because it belongs to the repository, not to
             the user — and because watching it grow is the point. */}
