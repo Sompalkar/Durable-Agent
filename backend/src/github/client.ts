@@ -44,6 +44,17 @@ export interface FileChange {
 	content: string | null;
 }
 
+/** One thing a human asked for on the pull request. */
+export interface ReviewComment {
+	id: number;
+	author: string;
+	body: string;
+	createdAt: string;
+	/** File and line, when the comment was left on the diff rather than the thread. */
+	path?: string;
+	line?: number;
+}
+
 export interface PullRequest {
 	number: number;
 	url: string;
@@ -126,7 +137,131 @@ export class GitHubClient {
 		return decodeBase64(data.content);
 	}
 
+	/**
+	 * Everything a human has said on the pull request.
+	 *
+	 * Two endpoints, because GitHub keeps them apart: comments left on specific
+	 * lines of the diff, and comments in the conversation thread. A reviewer does
+	 * not think of those as different things, so neither should the agent.
+	 *
+	 * Comments by the token's own account are dropped — the agent replying to
+	 * itself would loop forever, and it has nothing to learn from its own words.
+	 */
+	async reviewComments(number: number, self: string, since?: string): Promise<ReviewComment[]> {
+		const query = since ? `?since=${encodeURIComponent(since)}` : '';
+
+		const [inline, thread] = await Promise.all([
+			this.request<
+				Array<{
+					id: number;
+					user: { login: string } | null;
+					body: string;
+					created_at: string;
+					path?: string;
+					line?: number | null;
+				}>
+			>(`/repos/${this.slug()}/pulls/${number}/comments${query}`),
+			this.request<
+				Array<{ id: number; user: { login: string } | null; body: string; created_at: string }>
+			>(`/repos/${this.slug()}/issues/${number}/comments${query}`),
+		]);
+
+		const mapped: ReviewComment[] = [
+			...inline.map((comment) => ({
+				id: comment.id,
+				author: comment.user?.login ?? 'unknown',
+				body: comment.body,
+				createdAt: comment.created_at,
+				...(comment.path ? { path: comment.path } : {}),
+				...(typeof comment.line === 'number' ? { line: comment.line } : {}),
+			})),
+			...thread.map((comment) => ({
+				id: comment.id,
+				author: comment.user?.login ?? 'unknown',
+				body: comment.body,
+				createdAt: comment.created_at,
+			})),
+		];
+
+		return mapped
+			.filter((comment) => comment.author !== self && comment.body.trim() !== '')
+			.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+	}
+
+	/** Leave a reply on the pull request thread. */
+	async comment(number: number, body: string): Promise<void> {
+		await this.request(`/repos/${this.slug()}/issues/${number}/comments`, {
+			method: 'POST',
+			body: { body },
+		});
+	}
+
 	// ----------------------------------------------------------------- write
+
+	/**
+	 * Add a commit to a branch that already exists.
+	 *
+	 * Same object dance as opening a pull request, with two differences: the
+	 * parent is the branch's current head rather than the original base, and the
+	 * ref is updated instead of created. Reading the head fresh each time is what
+	 * makes this safe to run from an alarm days later — the branch may have moved.
+	 */
+	async commitToBranch(options: {
+		branch: string;
+		message: string;
+		changes: FileChange[];
+	}): Promise<{ sha: string }> {
+		if (options.changes.length === 0) {
+			throw new GitHubError('There is nothing to commit.', 400);
+		}
+
+		const head = await this.headCommit(options.branch);
+		const parent = await this.request<{ tree: { sha: string } }>(
+			`/repos/${this.slug()}/git/commits/${head}`,
+		);
+
+		const tree = await this.buildTree(parent.tree.sha, options.changes);
+		const commit = await this.request<{ sha: string }>(`/repos/${this.slug()}/git/commits`, {
+			method: 'POST',
+			body: { message: options.message, tree, parents: [head] },
+		});
+
+		await this.request(
+			`/repos/${this.slug()}/git/refs/heads/${encodeURIComponent(options.branch)}`,
+			{ method: 'PATCH', body: { sha: commit.sha } },
+		);
+
+		return { sha: commit.sha };
+	}
+
+	/** Blobs for each change, layered onto an existing tree. */
+	private async buildTree(baseTreeSha: string, changes: FileChange[]): Promise<string> {
+		const blobs = await Promise.all(
+			changes.map(async (change) => {
+				if (change.content === null) return { path: change.path, sha: null };
+				const blob = await this.request<{ sha: string }>(`/repos/${this.slug()}/git/blobs`, {
+					method: 'POST',
+					body: { content: encodeBase64(change.content), encoding: 'base64' },
+				});
+				return { path: change.path, sha: blob.sha };
+			}),
+		);
+
+		const tree = await this.request<{ sha: string }>(`/repos/${this.slug()}/git/trees`, {
+			method: 'POST',
+			body: {
+				base_tree: baseTreeSha,
+				tree: blobs.map((blob) => ({
+					path: blob.path,
+					mode: '100644',
+					type: 'blob',
+					sha: blob.sha,
+				})),
+			},
+		});
+
+		return tree.sha;
+	}
 
 	/**
 	 * Commit a set of changes onto a new branch and open a pull request.
@@ -152,41 +287,15 @@ export class GitHubClient {
 			`/repos/${this.slug()}/git/commits/${options.baseCommitSha}`,
 		);
 
-		// One blob per changed file. Independent, so they go together.
-		const blobs = await Promise.all(
-			options.changes.map(async (change) => {
-				if (change.content === null) return { path: change.path, sha: null };
-				const blob = await this.request<{ sha: string }>(
-					`/repos/${this.slug()}/git/blobs`,
-					{
-						method: 'POST',
-						body: { content: encodeBase64(change.content), encoding: 'base64' },
-					},
-				);
-				return { path: change.path, sha: blob.sha };
-			}),
-		);
-
-		const tree = await this.request<{ sha: string }>(`/repos/${this.slug()}/git/trees`, {
-			method: 'POST',
-			body: {
-				// Layered on the base tree, so files the agent never touched are
-				// carried over instead of being deleted.
-				base_tree: baseCommit.tree.sha,
-				tree: blobs.map((blob) => ({
-					path: blob.path,
-					mode: '100644',
-					type: 'blob',
-					sha: blob.sha,
-				})),
-			},
-		});
+		// Layered on the base tree, so files the agent never touched are carried
+		// over instead of being deleted.
+		const tree = await this.buildTree(baseCommit.tree.sha, options.changes);
 
 		const commit = await this.request<{ sha: string }>(`/repos/${this.slug()}/git/commits`, {
 			method: 'POST',
 			body: {
 				message: options.commitMessage,
-				tree: tree.sha,
+				tree,
 				parents: [options.baseCommitSha],
 			},
 		});
