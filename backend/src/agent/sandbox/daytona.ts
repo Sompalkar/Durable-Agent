@@ -49,6 +49,16 @@ const WORKDIR = '/home/daytona/workspace';
  */
 const MARKER = '/tmp/.agent-run-marker';
 
+/** Where a streamed command's output and exit code are collected. */
+const LOG_FILE = '/tmp/.agent-run.log';
+const EXIT_FILE = '/tmp/.agent-run.exit';
+
+/** How often to ask for new output. Every poll is an API call, so not too eager. */
+const POLL_INTERVAL_MS = 1_200;
+
+/** Separates the log tail from the exit code in a single polling response. */
+const POLL_DELIMITER = '\n<<<AGENT_EXIT>>>';
+
 /** Guard rails on how much we are willing to move in and out of the sandbox. */
 const MAX_UPLOAD_BYTES = 2 * 1024 * 1024;
 const MAX_FILE_BYTES = 512 * 1024;
@@ -104,11 +114,13 @@ export class DaytonaSandbox implements SandboxProvider {
 		await this.exec(sandboxId, `touch ${MARKER}`, 30);
 
 		const startedAt = Date.now();
-		const result = await this.exec(
-			sandboxId,
-			`cd ${WORKDIR} 2>/dev/null || mkdir -p ${WORKDIR} && cd ${WORKDIR}; ${options.command}`,
-			options.timeoutSeconds,
-		);
+		const result = options.onOutput
+			? await this.execStreaming(sandboxId, options.command, options.timeoutSeconds, options.onOutput)
+			: await this.exec(
+					sandboxId,
+					`cd ${WORKDIR} 2>/dev/null || mkdir -p ${WORKDIR} && cd ${WORKDIR}; ${options.command}`,
+					options.timeoutSeconds,
+				);
 		const durationMs = Date.now() - startedAt;
 
 		return {
@@ -117,6 +129,81 @@ export class DaytonaSandbox implements SandboxProvider {
 			stderr: truncate(result.stderr),
 			changedFiles: await this.collectChanges(sandboxId),
 			durationMs,
+		};
+	}
+
+	/**
+	 * Run a command and report its output as it arrives.
+	 *
+	 * Daytona's execute endpoint is request/response: it returns when the command
+	 * finishes, so there is no stream to subscribe to. The way around that is to
+	 * stop asking it to run the command in the foreground — launch it detached
+	 * with its output redirected to a file, then poll that file.
+	 *
+	 * Each poll returns only the bytes written since the last one, so the cost is
+	 * proportional to the output rather than to how long the command takes.
+	 */
+	private async execStreaming(
+		sandboxId: string,
+		command: string,
+		timeoutSeconds: number,
+		onOutput: (chunk: string) => void,
+	): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+		// The exit-code file is written last, so its existence is the signal that
+		// the command finished — checking the pid would race a process that has
+		// exited but not yet flushed its output.
+		const launch = [
+			`cd ${WORKDIR} 2>/dev/null || mkdir -p ${WORKDIR} && cd ${WORKDIR}`,
+			`rm -f ${LOG_FILE} ${EXIT_FILE}`,
+			`touch ${LOG_FILE}`,
+			`nohup sh -c ${shellQuote(`{ ${command} ; } > ${LOG_FILE} 2>&1 ; echo $? > ${EXIT_FILE}`)} >/dev/null 2>&1 &`,
+			'echo launched',
+		].join(' ; ');
+
+		const started = await this.exec(sandboxId, launch, 30);
+		if (started.exitCode !== 0) {
+			throw new SandboxError(`Could not start the command: ${tailOf(started.stderr)}`);
+		}
+
+		let offset = 0;
+		let output = '';
+		const deadline = Date.now() + timeoutSeconds * 1000;
+
+		while (Date.now() < deadline) {
+			await sleep(POLL_INTERVAL_MS);
+
+			// One call gets both the new bytes and the finished-or-not answer. Two
+			// calls would double the polling cost for no extra information.
+			const poll = await this.exec(
+				sandboxId,
+				`tail -c +${offset + 1} ${LOG_FILE} 2>/dev/null; printf '${POLL_DELIMITER}'; cat ${EXIT_FILE} 2>/dev/null`,
+				30,
+			);
+
+			const marker = poll.stdout.lastIndexOf(POLL_DELIMITER);
+			const chunk = marker === -1 ? poll.stdout : poll.stdout.slice(0, marker);
+			const exitText = marker === -1 ? '' : poll.stdout.slice(marker + POLL_DELIMITER.length).trim();
+
+			if (chunk) {
+				offset += byteLengthOf(chunk);
+				// Truncation applies to what the model is sent, not to what the user
+				// watches — the live view is free, the context is not.
+				output += chunk;
+				onOutput(chunk);
+			}
+
+			if (exitText !== '') {
+				return { exitCode: Number(exitText) || 0, stdout: output, stderr: '' };
+			}
+		}
+
+		// Timed out. Kill it rather than leaving it running in a container that is
+		// about to be destroyed anyway — an orphan can still burn CPU until then.
+		await this.exec(sandboxId, `pkill -f ${shellQuote(command)} || true`, 15).catch(() => {});
+		return {
+			exitCode: 124,
+			stdout: output,
+			stderr: `Command exceeded ${timeoutSeconds}s and was stopped.`,
 		};
 	}
 
@@ -345,6 +432,15 @@ function tailOf(value: string): string {
 /** Remove `user:token@` from a clone URL before it is left lying in git config. */
 function stripCredentials(url: string): string {
 	return url.replace(/\/\/[^@/]*@/, '//');
+}
+
+function sleep(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Byte length, because `tail -c` counts bytes and JavaScript counts code units. */
+function byteLengthOf(value: string): number {
+	return new TextEncoder().encode(value).length;
 }
 
 function truncate(value: string): string {

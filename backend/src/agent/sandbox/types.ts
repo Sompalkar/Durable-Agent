@@ -61,6 +61,13 @@ export interface RunOptions {
 	 * is the slow part of every turn.
 	 */
 	setup?: string;
+	/**
+	 * Called with each new chunk of output while the command is still running.
+	 *
+	 * Optional because not every caller wants to stream — a background run has
+	 * nobody watching, and paying for extra round trips to nobody is waste.
+	 */
+	onOutput?: (chunk: string) => void;
 }
 
 export interface SandboxProvider {

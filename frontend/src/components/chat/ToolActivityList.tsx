@@ -8,7 +8,7 @@
  * its arguments and how long it took.
  */
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { classNames, formatDuration } from "@/lib/format";
 import type { ToolActivity } from "@/lib/types";
 import {
@@ -36,6 +36,12 @@ function ToolActivityRow({ activity }: { activity: ToolActivity }) {
   const args = formatArguments(activity.input);
   // Shell commands read better as a command line than as JSON arguments.
   const shellCommand = extractCommand(activity);
+
+  // A running command opens itself, so output is visible as it arrives rather
+  // than waiting for a click nobody knows to make. Once it finishes the row
+  // collapses back and stops competing with the reply for attention.
+  const streaming = activity.status === "running" && Boolean(activity.output);
+  const open = expanded || streaming;
 
   return (
     <li className="animate-in overflow-hidden rounded-lg border border-line bg-panel/60">
@@ -72,17 +78,46 @@ function ToolActivityRow({ activity }: { activity: ToolActivity }) {
         <ChevronIcon
           className={classNames(
             "h-3.5 w-3.5 shrink-0 text-ink-faint transition-transform",
-            expanded && "rotate-90",
+            open && "rotate-90",
           )}
         />
       </button>
 
-      {expanded ? (
-        <pre className="max-h-56 overflow-auto border-t border-line bg-canvas px-3 py-2.5 font-mono text-[12px] leading-relaxed text-ink-soft">
-          {JSON.stringify(activity.input, null, 2)}
-        </pre>
+      {open ? (
+        activity.output ? (
+          <CommandLog text={activity.output} live={activity.status === "running"} />
+        ) : (
+          <pre className="max-h-56 overflow-auto border-t border-line bg-canvas px-3 py-2.5 font-mono text-[12px] leading-relaxed text-ink-soft">
+            {JSON.stringify(activity.input, null, 2)}
+          </pre>
+        )
       ) : null}
     </li>
+  );
+}
+
+/**
+ * The tail of a command's output.
+ *
+ * Pinned to the bottom while the command runs, the way a terminal behaves —
+ * scrolling up to read something and having it yanked back is worse than not
+ * following at all, so the pin stops the moment the command finishes.
+ */
+function CommandLog({ text, live }: { text: string; live: boolean }) {
+  const endRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (live) endRef.current?.scrollIntoView({ block: "end" });
+  }, [text, live]);
+
+  return (
+    <div className="max-h-56 overflow-auto border-t border-line bg-canvas">
+      <pre className="px-3 py-2.5 font-mono text-[12px] leading-relaxed text-ink-soft">
+        {text}
+        {live ? <span className="cursor-blink text-accent">▍</span> : null}
+      </pre>
+      <div ref={endRef} />
+    </div>
   );
 }
 

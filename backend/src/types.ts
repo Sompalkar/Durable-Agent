@@ -186,6 +186,8 @@ export type AgentEvent =
 	| { type: 'proposals'; proposals: Proposal[] }
 	/** The agent rewrote its checklist. */
 	| { type: 'plan'; plan: PlanStep[] }
+	/** Output from a shell command, while it is still running. */
+	| { type: 'command_output'; id: string; chunk: string }
 	| { type: 'turn_end'; stopReason: string | null; usage: TurnUsage }
 	| { type: 'error'; message: string };
 

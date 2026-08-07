@@ -78,7 +78,12 @@ export interface CommandRecord {
 	durationMs: number;
 }
 
-type ToolHandler = (input: any, context: ToolContext) => Promise<ToolOutcome>;
+type ToolHandler = (
+	input: any,
+	context: ToolContext,
+	/** Present for interactive turns, so a tool can stream against its own call. */
+	toolUseId?: string,
+) => Promise<ToolOutcome>;
 
 /**
  * Caps on how much text a tool may return to the model.
@@ -91,6 +96,14 @@ type ToolHandler = (input: any, context: ToolContext) => Promise<ToolOutcome>;
  */
 const MAX_TOOL_OUTPUT_CHARS = 12_000;
 const MAX_SHELL_OUTPUT_CHARS = 4_000;
+
+/**
+ * How much live output is streamed to the browser.
+ *
+ * Far larger than what the model is sent, because watching is free and context
+ * is not — but still bounded, so `yes` cannot saturate the connection.
+ */
+const MAX_STREAMED_CHARS = 200_000;
 
 const HANDLERS: Record<string, ToolHandler> = {
 	// ----------------------------------------------------------------- files
@@ -375,7 +388,7 @@ const HANDLERS: Record<string, ToolHandler> = {
 
 	// --------------------------------------------------------------- sandbox
 
-	async run_command(input, context) {
+	async run_command(input, context, toolUseId) {
 		const { sandbox, workspace, repo } = context;
 		if (!sandbox) throw new Error('No sandbox is configured, so shell commands are unavailable.');
 
@@ -407,10 +420,23 @@ const HANDLERS: Record<string, ToolHandler> = {
 		const contents = await Promise.all(changed.map((file) => workspace.read(file.path)));
 		for (const file of changed) context.syncedVersions.set(file.path, file.version);
 
+		// Streamed only when there is somebody watching. A scheduled run emits into
+		// the void, and every poll is a round trip worth paying for only if it
+		// reaches a screen.
+		let streamed = 0;
 		const result = await sandbox.run({
 			command,
 			files: contents.map((file) => ({ path: file.path, content: file.content })),
 			timeoutSeconds: timeout,
+			onOutput: toolUseId
+				? (chunk) => {
+						// Capped so a runaway command cannot flood the connection. The
+						// full output still reaches the model through the tool result.
+						if (streamed >= MAX_STREAMED_CHARS) return;
+						streamed += chunk.length;
+						context.emit({ type: 'command_output', id: toolUseId, chunk });
+					}
+				: undefined,
 			repo: repo?.checkout,
 			// Installed only when the command needs it. This is the slow part of a
 			// turn, so it is opt-in per command rather than paid on every one.
@@ -465,12 +491,13 @@ export async function executeTool(
 	name: string,
 	input: unknown,
 	context: ToolContext,
+	toolUseId?: string,
 ): Promise<ToolOutcome> {
 	const handler = HANDLERS[name];
 	if (!handler) return { ok: false, content: `Unknown tool: ${name}`, summary: 'unknown tool' };
 
 	try {
-		const outcome = await handler(input ?? {}, context);
+		const outcome = await handler(input ?? {}, context, toolUseId);
 		return { ...outcome, content: truncate(outcome.content) };
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);

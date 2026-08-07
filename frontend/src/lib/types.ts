@@ -303,6 +303,7 @@ export type AgentEvent =
   | { type: "schedule_changed" }
   | { type: "proposals"; proposals: Proposal[] }
   | { type: "plan"; plan: PlanStep[] }
+  | { type: "command_output"; id: string; chunk: string }
   | { type: "turn_end"; stopReason: string | null; usage: TurnUsage }
   | { type: "error"; message: string };
 
@@ -314,6 +315,8 @@ export interface ToolActivity {
   status: "running" | "ok" | "failed";
   summary?: string;
   durationMs?: number;
+  /** Live stdout, accumulated while a shell command is still running. */
+  output?: string;
 }
 
 /** Normalise a persisted record into the shape the timeline renders. */

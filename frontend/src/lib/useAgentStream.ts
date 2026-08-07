@@ -96,6 +96,17 @@ export function useAgentStream(
         setActivities(activitiesRef.current);
         break;
 
+      case "command_output":
+        // Appended to the activity it belongs to, so output stays attached to
+        // the command that produced it even when tools run concurrently.
+        activitiesRef.current = activitiesRef.current.map((activity) =>
+          activity.id === event.id
+            ? { ...activity, output: (activity.output ?? "") + event.chunk }
+            : activity,
+        );
+        setActivities(activitiesRef.current);
+        break;
+
       case "tool_result":
         activitiesRef.current = activitiesRef.current.map((activity) =>
           activity.id === event.id
