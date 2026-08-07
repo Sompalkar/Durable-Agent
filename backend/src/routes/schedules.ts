@@ -8,7 +8,7 @@
 
 import { Hono } from 'hono';
 import { authenticate, type AuthEnv } from '../auth/middleware';
-import type { Cadence } from '../durable-objects/scheduler-do';
+import type { Cadence, ScheduleKind } from '../durable-objects/scheduler-do';
 import { ApiError } from '../http/errors';
 import { schedulerStub } from '../http/stubs';
 
@@ -42,6 +42,7 @@ scheduleRoutes.post('/', async (c) => {
 		label?: string;
 		prompt?: string;
 		cadence?: string;
+		kind?: string;
 		intervalMinutes?: number;
 		minuteOfDay?: number;
 		delayMinutes?: number;
@@ -50,7 +51,12 @@ scheduleRoutes.post('/', async (c) => {
 	if (typeof body.sessionId !== 'string' || !body.sessionId) {
 		throw ApiError.badRequest('"sessionId" is required.');
 	}
-	if (typeof body.prompt !== 'string' || !body.prompt.trim()) {
+
+	const kind: ScheduleKind = body.kind === 'review' ? 'review' : 'prompt';
+
+	// A review watcher has no prompt of its own — the reviewer writes it, every
+	// time it fires. Requiring one here would mean inventing text nobody reads.
+	if (kind === 'prompt' && (typeof body.prompt !== 'string' || !body.prompt.trim())) {
 		throw ApiError.badRequest('"prompt" must be a non-empty string.');
 	}
 	if (!CADENCES.includes(body.cadence as Cadence)) {
@@ -61,8 +67,9 @@ scheduleRoutes.post('/', async (c) => {
 		userId: c.get('user').id,
 		sessionId: body.sessionId,
 		label: body.label ?? 'Scheduled run',
-		prompt: body.prompt,
+		prompt: body.prompt ?? '',
 		cadence: body.cadence as Cadence,
+		kind,
 		intervalMinutes: body.intervalMinutes,
 		minuteOfDay: body.minuteOfDay,
 		delayMinutes: body.delayMinutes,

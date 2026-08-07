@@ -21,6 +21,15 @@ import type { AgentSessionDO } from './agent-session-do';
 
 export type Cadence = 'once' | 'hourly' | 'daily' | 'interval';
 
+/**
+ * What a schedule does when it fires.
+ *
+ *   prompt  send `prompt` to the agent as a message. The original behaviour.
+ *   review  check the session's pull request for new comments and answer them.
+ *           There is no prompt — the reviewer writes it.
+ */
+export type ScheduleKind = 'prompt' | 'review';
+
 export interface Schedule {
 	id: number;
 	/** The account that owns this schedule, and whose session it runs in. */
@@ -30,6 +39,7 @@ export interface Schedule {
 	/** The message sent to the agent when this fires. */
 	prompt: string;
 	cadence: Cadence;
+	kind: ScheduleKind;
 	/** Minutes between runs, for `interval`. */
 	intervalMinutes: number | null;
 	/** Minutes past midnight UTC, for `daily`. */
@@ -61,6 +71,7 @@ interface ScheduleRow extends Record<string, SqlStorageValue> {
 	label: string;
 	prompt: string;
 	cadence: string;
+	kind: string;
 	interval_minutes: number | null;
 	minute_of_day: number | null;
 	next_run_at: number;
@@ -103,6 +114,7 @@ export class SchedulerDO extends DurableObject<Env> {
 				label            TEXT    NOT NULL,
 				prompt           TEXT    NOT NULL,
 				cadence          TEXT    NOT NULL,
+				kind             TEXT    NOT NULL DEFAULT 'prompt',
 				interval_minutes INTEGER,
 				minute_of_day    INTEGER,
 				next_run_at      INTEGER NOT NULL,
@@ -119,6 +131,7 @@ export class SchedulerDO extends DurableObject<Env> {
 			// The owner is stored on the row rather than on the object, because an
 			// alarm fires with no request behind it — there is no cookie to read.
 			"user_id TEXT NOT NULL DEFAULT ''",
+			"kind TEXT NOT NULL DEFAULT 'prompt'",
 		]) {
 			try {
 				sql.exec(`ALTER TABLE schedules ADD COLUMN ${column}`);
@@ -160,6 +173,7 @@ export class SchedulerDO extends DurableObject<Env> {
 		label: string;
 		prompt: string;
 		cadence: Cadence;
+		kind?: ScheduleKind;
 		intervalMinutes?: number;
 		minuteOfDay?: number;
 		/** Delay before the first run, for `once`. Defaults to one minute. */
@@ -194,14 +208,15 @@ export class SchedulerDO extends DurableObject<Env> {
 		const [row] = this.ctx.storage.sql
 			.exec<ScheduleRow>(
 				`INSERT INTO schedules
-				   (user_id, session_id, label, prompt, cadence, interval_minutes, minute_of_day, next_run_at,
-				    created_at, needs_approval, status)
-				 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11) RETURNING *`,
+				   (user_id, session_id, label, prompt, cadence, kind, interval_minutes, minute_of_day,
+				    next_run_at, created_at, needs_approval, status)
+				 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12) RETURNING *`,
 				input.userId,
 				input.sessionId,
 				input.label.trim() || 'Scheduled run',
 				input.prompt.trim(),
 				input.cadence,
+				input.kind ?? 'prompt',
 				intervalMinutes,
 				minuteOfDay,
 				nextRunAt,
@@ -333,7 +348,10 @@ export class SchedulerDO extends DurableObject<Env> {
 				this.env.AGENT_SESSION.idFromName(`session:${schedule.userId}:${schedule.sessionId}`),
 			) as DurableObjectStub<AgentSessionDO>;
 
-			const result = await session.runHeadless(schedule.prompt, schedule.label);
+			const result =
+				schedule.kind === 'review'
+					? await session.runReviewPass(schedule.label)
+					: await session.runHeadless(schedule.prompt, schedule.label);
 			// A run the session declined — no credits left, turn cap reached, or
 			// already busy — is not a success. Recording it as one would make the
 			// run history quietly untrue, which is the last place you want that:
@@ -479,6 +497,7 @@ function toSchedule(row: ScheduleRow): Schedule {
 		id: row.id,
 		userId: row.user_id ?? '',
 		sessionId: row.session_id,
+		kind: (row.kind as ScheduleKind) ?? 'prompt',
 		label: row.label,
 		prompt: row.prompt,
 		cadence: row.cadence as Cadence,

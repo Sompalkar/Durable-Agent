@@ -15,6 +15,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import Anthropic from '@anthropic-ai/sdk';
 import { fetchBudget, fetchGitHubToken, reportTurn } from '../auth/api-client';
+import { GitHubClient } from '../github/client';
 import { describeAgentError } from '../agent/errors';
 import { addUsage, EMPTY_USAGE, estimateCostUsd } from '../agent/pricing';
 import { runAgentTurn } from '../agent/runner';
@@ -33,6 +34,7 @@ import type {
 	Proposal,
 	SessionSummary,
 	SessionUsage,
+	StoredPullRequest,
 	StoredRepo,
 	ToolRecord,
 	TranscriptMessage,
@@ -170,6 +172,102 @@ export class AgentSessionDO extends DurableObject<Env> {
 		// A new task starts from a clean diff.
 		this.setMeta('changedPaths', '[]');
 		this.setMeta('commands', '[]');
+	}
+
+	/** Remember the pull request this session opened, so it can be watched. */
+	async attachPullRequest(pull: StoredPullRequest): Promise<void> {
+		this.setMeta('pullRequest', JSON.stringify(pull));
+	}
+
+	async pullRequest(): Promise<StoredPullRequest | null> {
+		const stored = this.getMeta('pullRequest');
+		return stored ? (JSON.parse(stored) as StoredPullRequest) : null;
+	}
+
+	/**
+	 * Answer whatever a reviewer has said since the last pass.
+	 *
+	 * Driven by an alarm, which is the whole point: the container that opened the
+	 * pull request was destroyed the moment that turn ended, possibly days ago.
+	 * Nothing is resumed — the diff is rebuilt from this object's own record of
+	 * what changed, a fresh sandbox is checked out underneath it, and the work
+	 * continues. The machine was never the thing that mattered.
+	 */
+	async runReviewPass(trigger: string): Promise<{ text: string; ok: boolean }> {
+		const [pull, repo] = await Promise.all([this.pullRequest(), this.repo()]);
+		if (!pull || !repo) return { text: 'Skipped: no pull request to watch.', ok: false };
+		if (this.running) return { text: 'Skipped: a turn was already running.', ok: false };
+
+		const credentials = await fetchGitHubToken(this.env, this.userId()).catch(() => null);
+		if (!credentials) return { text: 'Skipped: GitHub is no longer connected.', ok: false };
+
+		const [owner, name] = repo.fullName.split('/') as [string, string];
+		const client = new GitHubClient(credentials.token, owner, name);
+
+		const comments = await client.reviewComments(
+			pull.number,
+			credentials.login,
+			pull.reviewedThrough ?? undefined,
+		);
+		if (comments.length === 0) return { text: 'No new review comments.', ok: true };
+
+		// Marked as read before the work, not after. A turn that crashes halfway
+		// must not leave the agent answering the same review on every alarm — a
+		// missed comment is recoverable, an infinite loop on a paid API is not.
+		const newest = comments[comments.length - 1]?.createdAt ?? pull.reviewedThrough;
+		await this.attachPullRequest({ ...pull, reviewedThrough: newest });
+
+		const prompt = [
+			`A reviewer has left ${comments.length} comment${comments.length === 1 ? '' : 's'} on pull request #${pull.number}.`,
+			'Address them in the code. Do not argue with the reviewer, and do not make changes they did not ask for.',
+			'',
+			...comments.map((comment) =>
+				comment.path
+					? `- ${comment.author} on ${comment.path}:${comment.line ?? '?'} — ${comment.body}`
+					: `- ${comment.author} — ${comment.body}`,
+			),
+			'',
+			'When you are done, verify the change the same way you did originally.',
+		].join('\n');
+
+		const before = new Set(await this.changedPaths());
+		const result = await this.runHeadless(prompt, trigger);
+		if (!result.ok) return result;
+
+		// Push whatever the turn touched onto the same branch. Everything the
+		// agent has ever changed goes up, not just this pass — the branch is a
+		// snapshot of the work, not a log of the passes.
+		const changed = await this.changedPaths();
+		const workspace = this.workspaceStub();
+		const changes = await Promise.all(
+			changed.map(async (path) => {
+				const file = await workspace.read(path).catch(() => null);
+				return { path: path.replace(/^\//, ''), content: file?.content ?? null };
+			}),
+		);
+
+		try {
+			await client.commitToBranch({
+				branch: pull.branch,
+				message: `Address review feedback on #${pull.number}`,
+				changes,
+			});
+			await client.comment(
+				pull.number,
+				`Pushed a change addressing the ${comments.length} comment${comments.length === 1 ? '' : 's'} above.\n\n${result.text.slice(0, 1_000)}`,
+			);
+		} catch (error) {
+			return {
+				text: `Made the change but could not push it: ${error instanceof Error ? error.message : 'unknown error'}`,
+				ok: false,
+			};
+		}
+
+		const added = changed.filter((path) => !before.has(path)).length;
+		return {
+			text: `Addressed ${comments.length} comment${comments.length === 1 ? '' : 's'} and pushed to ${pull.branch}${added > 0 ? ` (${added} new file${added === 1 ? '' : 's'})` : ''}.`,
+			ok: true,
+		};
 	}
 
 	async repo(): Promise<StoredRepo | null> {

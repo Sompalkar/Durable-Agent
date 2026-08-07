@@ -22,7 +22,7 @@ import { GitHubClient, GitHubError } from '../github/client';
 import { describeImport, planImport } from '../github/import';
 import { buildPullRequestBody } from '../github/report';
 import { ApiError } from '../http/errors';
-import { repoBrainStub, sessionStub, workspaceStub } from '../http/stubs';
+import { repoBrainStub, schedulerStub, sessionStub, workspaceStub } from '../http/stubs';
 
 export const githubRoutes = new Hono<AuthEnv>();
 
@@ -40,6 +40,15 @@ const INSTALL_COMMANDS: Array<{ file: string; command: string }> = [
 	{ file: 'Cargo.toml', command: 'cargo fetch' },
 	{ file: 'Gemfile', command: 'bundle install' },
 ];
+
+/**
+ * How often to check a pull request for new review comments.
+ *
+ * Ten minutes is well inside the time it takes a human to write one, and each
+ * check is two cheap API calls. Polling faster would spend more and change
+ * nothing, because the reviewer is the slow part.
+ */
+const REVIEW_POLL_MINUTES = 10;
 
 /** How many packages to install in a monorepo before giving up on guessing. */
 const MAX_INSTALL_TARGETS = 4;
@@ -184,17 +193,18 @@ githubRoutes.get('/:id/github', async (c) => {
 	const user = c.get('user');
 	const session = sessionStub(c.env, user.id, c.req.param('id'));
 
-	const [repo, changedPaths, commands] = await Promise.all([
+	const [repo, changedPaths, commands, pullRequest] = await Promise.all([
 		session.repo(),
 		session.changedPaths(),
 		session.commands(),
+		session.pullRequest(),
 	]);
 
 	// Knowledge is keyed on the repository, not the session, so this is what
 	// every task on this codebase has accumulated — not just this one.
 	const knowledge = repo ? await repoBrainStub(c.env, user.id, repo.fullName).listMemories() : [];
 
-	return c.json({ repo, changedPaths, commands, knowledge });
+	return c.json({ repo, changedPaths, commands, knowledge, pullRequest });
 });
 
 /** DELETE /api/sessions/:id/github/knowledge/:memoryId — forget one repo fact. */
@@ -283,6 +293,26 @@ githubRoutes.post('/:id/github/pull-request', async (c) => {
 				model: summary.model,
 			}),
 			changes,
+		});
+
+		// Remember it, then arm a watcher. The alarm is what makes this a loop
+		// rather than a one-shot: the container that built this diff is already
+		// gone, and the next pass will rebuild it from the Durable Object.
+		await session.attachPullRequest({
+			number: pull.number,
+			url: pull.url,
+			branch: pull.branch,
+			reviewedThrough: new Date().toISOString(),
+		});
+
+		await schedulerStub(c.env, user.id).create({
+			userId: user.id,
+			sessionId,
+			label: `Watch #${pull.number}`,
+			prompt: '',
+			cadence: 'interval',
+			kind: 'review',
+			intervalMinutes: REVIEW_POLL_MINUTES,
 		});
 
 		return c.json({ pullRequest: pull });

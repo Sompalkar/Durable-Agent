@@ -137,6 +137,20 @@ export type PlanStatus = 'pending' | 'active' | 'done';
  * token fetched out of the main API, so revoking the token on GitHub takes
  * effect immediately instead of leaving a working credential in storage.
  */
+/** A pull request this session opened, and how far its review has been read. */
+export interface StoredPullRequest {
+	number: number;
+	url: string;
+	branch: string;
+	/**
+	 * Timestamp of the newest comment already handled.
+	 *
+	 * Kept so a wake-up can ask GitHub only for what is new, and so a restart
+	 * cannot make the agent answer the same review twice.
+	 */
+	reviewedThrough: string | null;
+}
+
 export interface StoredRepo {
 	/** `owner/name`. */
 	fullName: string;
