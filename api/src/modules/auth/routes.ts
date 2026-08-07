@@ -70,8 +70,11 @@ authRoutes.post(
 
 		await collections.users().insertOne(user);
 
-		setSessionCookie(res, await signSessionToken(tokenClaims(user)));
-		res.status(201).json({ user: toPublicUser(user) });
+		const token = await signSessionToken(tokenClaims(user));
+		setSessionCookie(res, token);
+		// Also returned in the body, for clients on a different site than this API
+		// — see readToken in middleware/auth.ts.
+		res.status(201).json({ user: toPublicUser(user), token });
 	}),
 );
 
@@ -97,8 +100,9 @@ authRoutes.post(
 			.users()
 			.updateOne({ id: user.id }, { $set: { lastLoginAt: new Date(), updatedAt: new Date() } });
 
-		setSessionCookie(res, await signSessionToken(tokenClaims(user)));
-		res.json({ user: toPublicUser(user) });
+		const token = await signSessionToken(tokenClaims(user));
+		setSessionCookie(res, token);
+		res.json({ user: toPublicUser(user), token });
 	}),
 );
 

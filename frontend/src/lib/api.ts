@@ -16,6 +16,7 @@
  * and credentials are defined once. Components never build a fetch by hand.
  */
 
+import { readSessionToken, writeSessionToken } from "./session-token";
 import type {
   AccountUsage,
   AttachedRepo,
@@ -49,6 +50,12 @@ const BASE_URL = (
 const MAIN_API_URL = (
   process.env.NEXT_PUBLIC_MAIN_API_URL ?? "http://localhost:4000"
 ).replace(/\/$/, "");
+
+/** The bearer header, when a token is being held client-side. */
+function authHeader(): Record<string, string> {
+  const token = readSessionToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
 
 export class ApiError extends Error {
   constructor(
@@ -94,6 +101,8 @@ async function send<T>(
       credentials: "include",
       headers: {
         ...(init?.body ? { "Content-Type": "application/json" } : {}),
+        // Only present on split deployments; same-origin setups use the cookie.
+        ...authHeader(),
         ...init?.headers,
       },
     });
@@ -142,23 +151,27 @@ export const api = {
     password: string;
     name?: string;
   }): Promise<AuthUser> {
-    const { user } = await main<{ user: AuthUser }>("/api/auth/register", {
-      method: "POST",
-      body: JSON.stringify(input),
-    });
+    const { user, token } = await main<{ user: AuthUser; token?: string }>(
+      "/api/auth/register",
+      { method: "POST", body: JSON.stringify(input) },
+    );
+    writeSessionToken(token ?? null);
     return user;
   },
 
   async login(input: { email: string; password: string }): Promise<AuthUser> {
-    const { user } = await main<{ user: AuthUser }>("/api/auth/login", {
-      method: "POST",
-      body: JSON.stringify(input),
-    });
+    const { user, token } = await main<{ user: AuthUser; token?: string }>(
+      "/api/auth/login",
+      { method: "POST", body: JSON.stringify(input) },
+    );
+    writeSessionToken(token ?? null);
     return user;
   },
 
-  logout(): Promise<void> {
-    return main("/api/auth/logout", { method: "POST" });
+  async logout(): Promise<void> {
+    await main("/api/auth/logout", { method: "POST" });
+    // Cleared even if the request failed — the intent was to sign out.
+    writeSessionToken(null);
   },
 
   // --------------------------------------------------------------- github

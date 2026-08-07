@@ -28,7 +28,7 @@ export interface AuthenticatedUser {
  * forged or expired token must never get past this function.
  */
 export async function requireUser(request: Request, env: Env): Promise<AuthenticatedUser> {
-	const token = readCookie(request.headers.get('cookie'), SESSION_COOKIE);
+	const token = readToken(request);
 	if (!token) throw new ApiError(401, 'You need to sign in.');
 
 	if (!env.AUTH_JWT_SECRET) {
@@ -57,6 +57,22 @@ export async function requireUser(request: Request, env: Env): Promise<Authentic
 		if (error instanceof ApiError) throw error;
 		throw new ApiError(401, 'Your session has expired. Please sign in again.');
 	}
+}
+
+/**
+ * The session token, from wherever the browser could send it.
+ *
+ * The cookie is preferred — httpOnly, so a script cannot read it. But a cookie
+ * only travels to the site that set it, and when the frontend and this Worker
+ * are on unrelated hosts there is no such site. The bearer header is what makes
+ * a split deployment work at all.
+ */
+function readToken(request: Request): string | null {
+	const cookie = readCookie(request.headers.get('cookie'), SESSION_COOKIE);
+	if (cookie) return cookie;
+
+	const header = request.headers.get('authorization') ?? '';
+	return header.startsWith('Bearer ') ? header.slice(7).trim() || null : null;
 }
 
 /**

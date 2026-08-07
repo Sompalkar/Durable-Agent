@@ -11,6 +11,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api";
+import { readSessionToken } from "./session-token";
 import type {
   AgentEvent,
   PlanStep,
@@ -171,7 +172,10 @@ export function useAgentStream(
       try {
         const response = await fetch(api.messagesUrl(sessionId), {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            ...(readSessionToken() ? { Authorization: `Bearer ${readSessionToken()}` } : {}),
+          },
           // Hand-rolled rather than routed through `api`, because this one
           // reads a stream instead of a JSON body — but it still needs the
           // session cookie, so the Worker knows whose session to run.
