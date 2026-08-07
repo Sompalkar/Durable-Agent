@@ -3,39 +3,59 @@
 	"name": "agent-durable-object",
 	"main": "src/index.ts",
 	"compatibility_date": "2025-06-01",
-	"compatibility_flags": ["nodejs_compat"],
-
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
 	"observability": {
 		"enabled": true
 	},
-
 	"durable_objects": {
 		"bindings": [
-			{ "name": "AGENT_SESSION", "class_name": "AgentSessionDO" },
-			{ "name": "WORKSPACE", "class_name": "WorkspaceDO" },
-			{ "name": "SESSION_REGISTRY", "class_name": "SessionRegistryDO" },
-			{ "name": "BRAIN", "class_name": "BrainDO" },
-			{ "name": "SCHEDULER", "class_name": "SchedulerDO" }
+			{
+				"name": "AGENT_SESSION",
+				"class_name": "AgentSessionDO"
+			},
+			{
+				"name": "WORKSPACE",
+				"class_name": "WorkspaceDO"
+			},
+			{
+				"name": "SESSION_REGISTRY",
+				"class_name": "SessionRegistryDO"
+			},
+			{
+				"name": "BRAIN",
+				"class_name": "BrainDO"
+			},
+			{
+				"name": "SCHEDULER",
+				"class_name": "SchedulerDO"
+			}
 			// To enable the Cloudflare shell, add:
 			// { "name": "Sandbox", "class_name": "Sandbox" }
 		]
 	},
-
 	// SQLite-backed Durable Objects. This is what replaces the sandbox:
 	// each object owns a real SQLite database that survives eviction.
 	"migrations": [
 		{
 			"tag": "v1",
-			"new_sqlite_classes": ["AgentSessionDO", "WorkspaceDO", "SessionRegistryDO"]
+			"new_sqlite_classes": [
+				"AgentSessionDO",
+				"WorkspaceDO",
+				"SessionRegistryDO"
+			]
 		},
 		{
 			"tag": "v2",
-			"new_sqlite_classes": ["BrainDO", "SchedulerDO"]
+			"new_sqlite_classes": [
+				"BrainDO",
+				"SchedulerDO"
+			]
 		}
 		// To enable the Cloudflare shell, add:
 		// { "tag": "v3", "new_sqlite_classes": ["Sandbox"] }
 	],
-
 	// ---------------------------------------------------------------------
 	// Optional: a real Linux shell, on Cloudflare.
 	//
@@ -59,7 +79,17 @@
 	//   }
 	// ],
 	// ---------------------------------------------------------------------
-
+	// Keeps the main API awake.
+	//
+	// Free hosting tiers spin a service down after ~15 minutes of quiet, and the
+	// first request afterwards pays a cold start of nearly a minute. That first
+	// request is somebody's login. A ping every ten minutes costs nothing here
+	// and removes the worst moment in the whole product.
+	"triggers": {
+		"crons": [
+			"*/10 * * * *"
+		]
+	},
 	"vars": {
 		// Defaults for a NEW session. Both are overridable per session from the
 		// model picker in the UI, so this only sets where you start.
@@ -68,28 +98,23 @@
 		// an agentic loop multiplies every one. Switch to Opus for the demo.
 		"AGENT_MODEL": "claude-haiku-4-5",
 		"AGENT_EFFORT": "low",
-
 		// Comma-separated allowlist. Must name real origins rather than "*",
 		// because the browser refuses to send the session cookie to a wildcard.
-		"ALLOWED_ORIGIN": "http://localhost:3000",
-
+		"ALLOWED_ORIGIN": "https://durable-agent-iota.vercel.app",
 		// The main backend (Node + MongoDB). The Worker calls it to archive turns
 		// and mirror the session list. Leave empty to run the agent standalone,
 		// with no accounts and no history.
-		"MAIN_API_URL": "http://localhost:4000",
-
+		"MAIN_API_URL": "https://durable-agent-api.onrender.com",
 		// Demo guard rails. Both are off when 0. Set them before sharing a public
 		// link, or anyone who opens it can spend your API budget.
 		"DEMO_TURN_LIMIT": "25",
 		"DEMO_HOURLY_TURN_LIMIT": "60",
-
 		// Background agents. A schedule the agent creates itself starts paused and
 		// needs your approval — an agent that can schedule itself unattended is the
 		// fastest way to wake up to a surprise bill.
 		"AGENT_SCHEDULES_NEED_APPROVAL": "true",
 		// Hard ceiling on how many times any one schedule may ever fire.
 		"SCHEDULE_MAX_RUNS": "20",
-
 		// Optional Linux shell for `run_command`. Leave empty and the agent
 		// simply has no shell — everything else still works.
 		//   "daytona"    → third-party sandbox, needs only DAYTONA_API_KEY.
@@ -102,7 +127,6 @@
 		"DAYTONA_TARGET": "us",
 		"DAYTONA_SNAPSHOT": "",
 		"DAYTONA_ORG_ID": "",
-
 		// Minutes a sandbox may sit idle before the provider stops it. This is
 		// only a safety net — the session disposes its sandbox when a turn ends.
 		"SANDBOX_IDLE_MINUTES": "5"

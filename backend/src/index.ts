@@ -32,7 +32,7 @@ app.use(
 			return allowed.includes(origin) ? origin : null;
 		},
 		allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-		allowHeaders: ['Content-Type'],
+		allowHeaders: ['Content-Type', 'Authorization'],
 		// Lets the browser attach the session cookie to these requests.
 		credentials: true,
 		maxAge: 86_400,
@@ -72,7 +72,28 @@ app.route('/api/sessions', githubRoutes);
 app.route('/api/brain', brainRoutes);
 app.route('/api/schedules', scheduleRoutes);
 
-export default app;
+export default {
+	fetch: app.fetch,
+
+	/**
+	 * Cron handler — see `triggers.crons` in wrangler.jsonc.
+	 *
+	 * Deliberately does nothing but touch `/health`. It is not a task queue and
+	 * should not become one: the schedules that run real work live in
+	 * `SchedulerDO`, where each has its own alarm and its own run history.
+	 */
+	async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext) {
+		if (!env.MAIN_API_URL) return;
+
+		ctx.waitUntil(
+			fetch(`${env.MAIN_API_URL}/health`, { signal: AbortSignal.timeout(20_000) })
+				.then((response) => {
+					if (!response.ok) console.warn(`Keep-warm ping returned ${response.status}`);
+				})
+				.catch((error) => console.warn('Keep-warm ping failed:', error)),
+		);
+	},
+} satisfies ExportedHandler<Env>;
 
 export { AgentSessionDO } from './durable-objects/agent-session-do';
 export { WorkspaceDO } from './durable-objects/workspace-do';
