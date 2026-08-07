@@ -13,7 +13,11 @@ services:
     runtime: node
     plan: free
     rootDir: api
-    buildCommand: npm ci && npm run build
+    # --include=dev is required, not optional. NODE_ENV=production is set below
+    # for the runtime, and npm honours it during install too — so a plain
+    # `npm ci` skips devDependencies and the build fails on a missing
+    # typescript and @types/node.
+    buildCommand: npm ci --include=dev && npm run build
     startCommand: npm start
     healthCheckPath: /health
     envVars:
