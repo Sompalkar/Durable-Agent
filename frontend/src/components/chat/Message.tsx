@@ -8,7 +8,67 @@
  * emits that need structure: fenced code blocks and paragraph breaks.
  */
 
+import { useState } from "react";
 import { Markdown } from "@/lib/markdown";
+
+function CodeBlock({
+  content,
+  language,
+}: {
+  content: string;
+  language: string;
+}) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(content);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch (err) {
+      console.error("Copy failed:", err);
+    }
+  };
+
+  return (
+    <figure className="relative overflow-hidden rounded-lg border border-line bg-canvas">
+      {language ? (
+        <figcaption className="border-b border-line px-3 py-1.5 font-mono text-[11px] uppercase tracking-wider text-ink-faint">
+          {language}
+        </figcaption>
+      ) : null}
+      <pre className="overflow-x-auto px-3 py-2.5">
+        <code className="font-mono text-[13px] leading-relaxed text-ink-soft">
+          {content}
+        </code>
+      </pre>
+      <button
+        onClick={handleCopy}
+        className="absolute top-2 right-2 inline-flex h-8 w-8 items-center justify-center rounded border border-line bg-canvas text-xs font-medium text-ink-soft transition-colors hover:bg-hover hover:text-ink active:bg-raised"
+        title={copied ? "Copied!" : "Copy code"}
+        aria-label={copied ? "Copied!" : "Copy code"}
+      >
+        {copied ? (
+          <span className="text-positive">✓</span>
+        ) : (
+          <svg
+            className="h-4 w-4"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
+            />
+          </svg>
+        )}
+      </button>
+    </figure>
+  );
+}
 
 export function UserMessage({ text }: { text: string }) {
   return (
@@ -61,21 +121,11 @@ export function MessageBody({
 
         if (segment.type === "code") {
           return (
-            <figure
+            <CodeBlock
               key={index}
-              className="overflow-hidden rounded-lg border border-line bg-canvas"
-            >
-              {segment.language ? (
-                <figcaption className="border-b border-line px-3 py-1.5 font-mono text-[11px] uppercase tracking-wider text-ink-faint">
-                  {segment.language}
-                </figcaption>
-              ) : null}
-              <pre className="overflow-x-auto px-3 py-2.5">
-                <code className="font-mono text-[13px] leading-relaxed text-ink-soft">
-                  {segment.content}
-                </code>
-              </pre>
-            </figure>
+              content={segment.content}
+              language={segment.language}
+            />
           );
         }
 
