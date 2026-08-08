@@ -17,14 +17,37 @@ export function Composer({
   onSend,
   onStop,
   disabled,
+  initialValue = "",
 }: {
   streaming: boolean;
   onSend: (message: string) => void;
   onStop: () => void;
   disabled?: boolean;
+  /**
+   * Starting text, used to hand the composer a task pulled from an issue —
+   * prefilled for editing rather than sent, because it is a starting point the
+   * user usually wants to narrow first.
+   *
+   * Applied by remounting from the caller (a changing `key`) rather than by
+   * syncing in an effect, which React 19 rejects outright.
+   */
+  initialValue?: string;
 }) {
-  const [value, setValue] = useState("");
+  const [value, setValue] = useState(initialValue);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Focus on mount only when something was prefilled, so an ordinary page load
+  // does not steal the caret. Placing the caret at the end lets the user keep
+  // typing rather than overwrite what arrived.
+  useEffect(() => {
+    if (!initialValue) return;
+    const element = textareaRef.current;
+    if (!element) return;
+    element.focus();
+    element.setSelectionRange(initialValue.length, initialValue.length);
+    // Mount-only: remounting is what delivers a new value.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Grow with the content up to a ceiling, then scroll. Reset to 0 first so the
   // measured scrollHeight reflects the content only, never the previous height.

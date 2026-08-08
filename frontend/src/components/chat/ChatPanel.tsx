@@ -37,8 +37,11 @@ export function ChatPanel({
   proposals,
   plan,
   onSend,
+  draft,
 }: {
   sessionId: string;
+  /** Text to load into the composer for editing rather than sending. */
+  draft?: { key: number; text: string };
   messages: TranscriptMessage[];
   stream: AgentStream;
   proposals: Proposal[];
@@ -147,7 +150,11 @@ export function ChatPanel({
 
       <PlanStrip plan={plan} streaming={stream.streaming} />
 
+      {/* Remounted whenever a new draft arrives — that is what loads the text,
+          and it means picking the same issue twice still refills a cleared box. */}
       <Composer
+        key={draft?.key ?? "empty"}
+        initialValue={draft?.text}
         streaming={stream.streaming}
         onSend={onSend}
         onStop={stream.stop}

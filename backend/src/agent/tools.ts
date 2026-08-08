@@ -378,7 +378,12 @@ const SANDBOX_TOOLS: Anthropic.Tool[] = [
 			'execute code. Use the file tools for plain reads and edits — they are far faster ' +
 			'than booting a container. ' +
 			'When a repository is attached, the sandbox already contains a fresh checkout with ' +
-			'your changes applied on top, so paths are the repo\'s own.',
+			'your changes applied on top, so paths are the repo\'s own. ' +
+			'IMPORTANT: the command starts in the repository root. Workspace paths are absolute ' +
+			'("/frontend/src/app.ts") but the matching shell path is relative to where you already ' +
+			'are ("frontend/src/app.ts"). Write "cd frontend && npm run build", never ' +
+			'"cd /frontend && npm run build" — a leading slash points at the container root, ' +
+			'where nothing of yours exists.',
 		input_schema: {
 			type: 'object',
 			properties: {

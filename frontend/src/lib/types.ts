@@ -156,6 +156,8 @@ export interface ToolRecord {
   ok: boolean;
   summary: string;
   durationMs: number;
+  /** Captured command output, so a reloaded turn still shows what happened. */
+  output?: string;
 }
 
 export interface TranscriptMessage {
@@ -333,7 +335,7 @@ export interface ToolActivity {
   status: "running" | "ok" | "failed";
   summary?: string;
   durationMs?: number;
-  /** Live stdout, accumulated while a shell command is still running. */
+  /** Command output — streamed while running, then restored from the record. */
   output?: string;
 }
 
@@ -346,5 +348,6 @@ export function toolRecordToActivity(record: ToolRecord): ToolActivity {
     status: record.ok ? "ok" : "failed",
     summary: record.summary,
     durationMs: record.durationMs,
+    ...(record.output ? { output: record.output } : {}),
   };
 }

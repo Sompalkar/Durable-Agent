@@ -232,6 +232,7 @@ export async function runAgentTurn(options: RunOptions): Promise<RunResult> {
 				ok: outcome.ok,
 				summary: outcome.summary,
 				durationMs,
+				...(outcome.output ? { output: outcome.output } : {}),
 			};
 			tools.push(record);
 			segments.push({ kind: 'tool', tool: record });

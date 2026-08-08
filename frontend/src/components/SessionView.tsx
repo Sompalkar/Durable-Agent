@@ -153,6 +153,7 @@ export function SessionView({ sessionId }: { sessionId: string }) {
               ok: activity.status !== "failed",
               summary: activity.summary ?? "",
               durationMs: activity.durationMs ?? 0,
+              ...(activity.output ? { output: activity.output } : {}),
             })),
             // Carried over from the live stream so the finished turn keeps the
             // order it was shown in. The server stores the same thing, so a
@@ -169,6 +170,9 @@ export function SessionView({ sessionId }: { sessionId: string }) {
                       ok: segment.activity.status !== "failed",
                       summary: segment.activity.summary ?? "",
                       durationMs: segment.activity.durationMs ?? 0,
+                      ...(segment.activity.output
+                        ? { output: segment.activity.output }
+                        : {}),
                     },
                   },
             ),
@@ -197,6 +201,13 @@ export function SessionView({ sessionId }: { sessionId: string }) {
     onProposals: useCallback((next: Proposal[]) => setProposals(next), []),
     onPlan: useCallback((next: PlanStep[]) => setPlan(next), []),
   });
+
+  // An issue becomes a draft, not a turn. It arrives with a counter so picking
+  // the same issue twice still refills the box.
+  const [draft, setDraft] = useState<{ key: number; text: string } | undefined>();
+  const prefill = useCallback((task: string) => {
+    setDraft({ key: Date.now(), text: task });
+  }, []);
 
   const send = useCallback(
     (message: string) => {
@@ -299,6 +310,7 @@ export function SessionView({ sessionId }: { sessionId: string }) {
 
         <ChatPanel
           sessionId={sessionId}
+          draft={draft}
           messages={messages}
           stream={stream}
           proposals={proposals}
@@ -337,7 +349,7 @@ export function SessionView({ sessionId }: { sessionId: string }) {
           schedules={schedules}
           archive={archive}
           repo={repo}
-          onTaskReady={send}
+          onTaskReady={prefill}
         />
       </div>
     </div>

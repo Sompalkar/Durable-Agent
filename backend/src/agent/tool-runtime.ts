@@ -114,6 +114,13 @@ const MAX_SHELL_OUTPUT_CHARS = 4_000;
  */
 const MAX_STREAMED_CHARS = 200_000;
 
+/**
+ * Ceiling on command output stored with the turn. Generous enough for a stack
+ * trace or a failing test run, small enough that a noisy install does not bloat
+ * every future read of the transcript.
+ */
+const MAX_PERSISTED_OUTPUT_CHARS = 8_000;
+
 const HANDLERS: Record<string, ToolHandler> = {
 	// ----------------------------------------------------------------- files
 
@@ -422,7 +429,7 @@ const HANDLERS: Record<string, ToolHandler> = {
 		const { sandbox, workspace, repo } = context;
 		if (!sandbox) throw new Error('No sandbox is configured, so shell commands are unavailable.');
 
-		const command = requireString(input.command, 'command');
+		const requested = requireString(input.command, 'command');
 		const timeout = Math.min(300, Math.max(5, Number(input.timeout_seconds) || 120));
 
 		// Two modes, and the difference is what counts as the baseline.
@@ -436,6 +443,15 @@ const HANDLERS: Record<string, ToolHandler> = {
 		// is destroyed at the end of the turn, and the record of what changed is
 		// what survives.
 		const files = await workspace.list();
+
+		// Workspace paths are absolute ("/frontend/..."), but the shell starts in
+		// the repository root, where the matching path is relative. A leading
+		// `cd /frontend` therefore points at the container root and fails with a
+		// bare "exit 2", costing a step and telling the model nothing. The intent
+		// is unambiguous when the first segment names a real workspace directory,
+		// so it is corrected rather than failed.
+		const command = rerootLeadingCd(requested, files.map((file) => file.path));
+
 		const candidates = repo
 			? files.filter((file) => context.changedPaths.has(file.path))
 			: files;
@@ -503,12 +519,18 @@ const HANDLERS: Record<string, ToolHandler> = {
 			durationMs: result.durationMs,
 		});
 
+		// Kept on the record as well as streamed. The live view comes from SSE and
+		// is gone on reload; without this a failed build shows its arguments and
+		// no reason, which is exactly when the reason matters most.
+		const log = [result.stdout, result.stderr].filter((part) => part.trim()).join('\n');
+
 		return {
 			ok: result.exitCode === 0,
 			content: sections.join('\n\n'),
 			summary: `exit ${result.exitCode}${
 				result.changedFiles.length ? `, ${result.changedFiles.length} file(s) changed` : ''
 			}`,
+			output: log.trim() ? keepTail(log, MAX_PERSISTED_OUTPUT_CHARS) : `exit ${result.exitCode} · no output`,
 		};
 	},
 };
@@ -581,6 +603,35 @@ function truncate(content: string): string {
 }
 
 /** Keep the last N characters — where compiler and test failures live. */
+/**
+ * Rewrite a leading `cd /foo` to `cd foo` when `/foo` is a top-level workspace
+ * directory.
+ *
+ * Deliberately narrow: only the first command in the string, only an absolute
+ * path, and only when the first segment is a directory the workspace actually
+ * has. Anything else is left exactly as written — `cd /tmp` and `cd /usr/bin`
+ * mean what they say, and silently rewriting them would be worse than failing.
+ */
+export function rerootLeadingCd(command: string, paths: string[]): string {
+	const match = /^(\s*cd\s+)(\/[^\s;&|]+)/.exec(command);
+	if (!match) return command;
+
+	const target = match[2];
+	const head = target.split('/')[1];
+	if (!head) return command;
+
+	const isWorkspaceDirectory = paths.some((path) => path.startsWith(`/${head}/`));
+	if (!isWorkspaceDirectory) return command;
+
+	return command.slice(0, match[1].length) + target.slice(1) + command.slice(match[0].length);
+}
+
+/** Keep the end of a long log — a build puts its failure last. */
+function keepTail(content: string, limit: number): string {
+	if (content.length <= limit) return content;
+	return `… ${content.length - limit} earlier characters omitted …\n${content.slice(-limit)}`;
+}
+
 function tail(content: string): string {
 	if (content.length <= MAX_SHELL_OUTPUT_CHARS) return content;
 	return `… ${content.length - MAX_SHELL_OUTPUT_CHARS} earlier characters omitted …\n${content.slice(-MAX_SHELL_OUTPUT_CHARS)}`;

@@ -105,6 +105,12 @@ export interface ToolOutcome {
 	content: string;
 	/** Short human-readable line for the UI timeline. */
 	summary: string;
+	/**
+	 * Output worth keeping for the user to read after the fact — command logs,
+	 * mostly. Streamed live over SSE either way; this is what survives a reload,
+	 * so it is capped where the streamed copy is not.
+	 */
+	output?: string;
 }
 
 /**
@@ -184,6 +190,8 @@ export interface ToolRecord {
 	ok: boolean;
 	summary: string;
 	durationMs: number;
+	/** Captured command output, so a reloaded turn still shows what happened. */
+	output?: string;
 }
 
 /**
