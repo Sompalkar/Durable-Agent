@@ -473,7 +473,7 @@ const HANDLERS: Record<string, ToolHandler> = {
 			setup: repo && input.install === true ? repo.installCommand : undefined,
 		});
 
-		for (const file of result.changedFiles) {
+		for (const file of result.changedFiles.filter((file) => isAgentAuthored(file.path))) {
 			const record = await workspace.write(
 				file.path,
 				file.content,
@@ -512,6 +512,24 @@ const HANDLERS: Record<string, ToolHandler> = {
 		};
 	},
 };
+
+/**
+ * Directory names that only ever contain generated output.
+ *
+ * The sandbox already prunes these, so this is a second line of defence: a
+ * provider whose change detection is slightly wrong must not be able to write a
+ * build directory into the diff, because that diff becomes a pull request.
+ */
+const GENERATED_DIRECTORIES = new Set([
+	'node_modules', '.git', 'dist', 'build', 'out', '.next', '.nuxt',
+	'.turbo', '.cache', 'coverage', 'target', '__pycache__', '.venv', 'vendor',
+]);
+
+/** True when a path looks like something a person would want to review. */
+function isAgentAuthored(path: string): boolean {
+	if (/\.(tsbuildinfo|log|map)$/.test(path)) return false;
+	return !path.split('/').some((segment) => GENERATED_DIRECTORIES.has(segment));
+}
 
 /**
  * Run one tool call. Never throws — failures come back as `ok: false` so the

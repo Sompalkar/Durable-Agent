@@ -23,9 +23,19 @@ const IMPORT_SUMMARY = "imported from GitHub";
 export function ChangedFileDiff({
   sessionId,
   path,
+  against = "import",
 }: {
   sessionId: string;
   path: string;
+  /**
+   * Which revision counts as "before".
+   *
+   * `import` compares against what GitHub gave us, which is what a pull request
+   * reviewer sees. `previous` compares against the revision immediately before
+   * the current one — the right baseline for "what did this one edit change",
+   * where the import is several edits ago and not the question being asked.
+   */
+  against?: "import" | "previous";
 }) {
   const [state, setState] = useState<
     | { status: "loading" }
@@ -43,7 +53,15 @@ export function ChangedFileDiff({
           api.fileHistory(sessionId, path),
         ]);
 
-        const baseline = revisions.find((entry) => entry.summary === IMPORT_SUMMARY);
+        const baseline =
+          against === "import"
+            ? revisions.find((entry) => entry.summary === IMPORT_SUMMARY)
+            : // Highest version below the current one. A brand-new file has none,
+              // which correctly renders as an addition.
+              revisions
+                .filter((entry) => entry.version < file.version)
+                .sort((a, b) => b.version - a.version)[0];
+
         const before = baseline
           ? (await api.fileRevision(sessionId, path, baseline.version)).revision.content
           : "";
@@ -62,7 +80,7 @@ export function ChangedFileDiff({
     return () => {
       cancelled = true;
     };
-  }, [sessionId, path]);
+  }, [sessionId, path, against]);
 
   if (state.status === "loading") {
     return (

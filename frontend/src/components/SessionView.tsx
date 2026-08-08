@@ -275,6 +275,7 @@ export function SessionView({ sessionId }: { sessionId: string }) {
         <BackgroundActivity onChanged={refreshSchedules} />
 
         <ChatPanel
+          sessionId={sessionId}
           messages={messages}
           stream={stream}
           proposals={proposals}

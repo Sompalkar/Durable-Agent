@@ -346,13 +346,24 @@ export class DaytonaSandbox implements SandboxProvider {
 	 * One `find` for anything newer than the marker dropped just before the
 	 * command ran, then base64 each hit into a delimited stream we can split up
 	 * here — a single round trip regardless of how many files changed.
+	 *
+	 * The exclusions use `-prune` on directory *names* rather than paths. The
+	 * earlier version matched `./dist/*`, which only catches a build directory at
+	 * the repository root — so in a monorepo `frontend/.next` and `backend/dist`
+	 * sailed through, and one `npm run build` reported 49 generated files as the
+	 * agent's own work. Pruning by name catches them at any depth, and skips
+	 * descending into them at all.
 	 */
 	private async collectChanges(sandboxId: string): Promise<SandboxFile[]> {
 		const script = `
 cd ${WORKDIR} 2>/dev/null || exit 0
-find . -type f -newer ${MARKER} \\
-  ! -path './node_modules/*' ! -path './.git/*' ! -path './dist/*' ! -path './.next/*' \\
-  -size -${Math.floor(MAX_FILE_BYTES / 1024)}k 2>/dev/null | head -50 | while read -r f; do
+find . \\
+  \\( -name node_modules -o -name .git -o -name dist -o -name build -o -name out \\
+     -o -name .next -o -name .nuxt -o -name .turbo -o -name .cache -o -name coverage \\
+     -o -name target -o -name __pycache__ -o -name .venv -o -name vendor \\) -prune -o \\
+  -type f -newer ${MARKER} \\
+  ! -name '*.tsbuildinfo' ! -name '*.log' ! -name '*.map' ! -name '*.lock' \\
+  -size -${Math.floor(MAX_FILE_BYTES / 1024)}k -print 2>/dev/null | head -50 | while read -r f; do
   printf '<<<FILE:%s\\n' "\${f#./}"
   base64 -w0 "$f" 2>/dev/null || base64 "$f"
   printf '\\n'

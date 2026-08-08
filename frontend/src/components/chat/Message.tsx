@@ -8,7 +8,7 @@
  * emits that need structure: fenced code blocks and paragraph breaks.
  */
 
-import { classNames } from "@/lib/format";
+import { Markdown } from "@/lib/markdown";
 
 export function UserMessage({ text }: { text: string }) {
   return (
@@ -80,15 +80,11 @@ export function MessageBody({
         }
 
         return (
-          <p
+          <Markdown
             key={index}
-            className={classNames(
-              "whitespace-pre-wrap text-[15px] leading-relaxed text-ink",
-              streaming && isLast && "caret",
-            )}
-          >
-            {segment.content}
-          </p>
+            text={segment.content}
+            caret={streaming && isLast}
+          />
         );
       })}
     </div>

@@ -16,9 +16,12 @@ import { ToolActivityList } from "./ToolActivityList";
 
 export function TurnTimeline({
   segments,
+  sessionId,
   streaming = false,
 }: {
   segments: TurnSegment[];
+  /** Passed down so a file-write row can show its diff inline. */
+  sessionId: string;
   streaming?: boolean;
 }) {
   return (
@@ -29,6 +32,7 @@ export function TurnTimeline({
             <ToolActivityList
               key={segment.activity.id}
               activities={[segment.activity]}
+              sessionId={sessionId}
             />
           );
         }

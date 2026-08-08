@@ -18,20 +18,46 @@ import {
   TerminalIcon,
 } from "@/components/ui/icons";
 import { LoadingDots } from "@/components/ui/Feedback";
+import { ChangedFileDiff } from "@/components/github/ChangedFileDiff";
 
-export function ToolActivityList({ activities }: { activities: ToolActivity[] }) {
+export function ToolActivityList({
+  activities,
+  sessionId,
+}: {
+  activities: ToolActivity[];
+  /** Enables inline diffs for file writes. Omitted where the session is unknown. */
+  sessionId?: string;
+}) {
   if (activities.length === 0) return null;
 
   return (
     <ul className="space-y-1">
       {activities.map((activity) => (
-        <ToolActivityRow key={activity.id} activity={activity} />
+        <ToolActivityRow key={activity.id} activity={activity} sessionId={sessionId} />
       ))}
     </ul>
   );
 }
 
-function ToolActivityRow({ activity }: { activity: ToolActivity }) {
+/** The path a file-writing tool touched, or null if this is not one. */
+function writtenPath(activity: ToolActivity): string | null {
+  if (!WRITE_TOOLS.has(activity.name)) return null;
+  const input = activity.input as { path?: unknown; to?: unknown } | null;
+  // `move_file` names its destination `to`; everything else uses `path`.
+  const path = typeof input?.path === "string" ? input.path : input?.to;
+  return typeof path === "string" && path ? path : null;
+}
+
+/** Tools whose result is best understood as a diff. */
+const WRITE_TOOLS = new Set(["write_file", "edit_file", "move_file", "restore_file"]);
+
+function ToolActivityRow({
+  activity,
+  sessionId,
+}: {
+  activity: ToolActivity;
+  sessionId?: string;
+}) {
   const [expanded, setExpanded] = useState(false);
   const args = formatArguments(activity.input);
   // Shell commands read better as a command line than as JSON arguments.
@@ -42,6 +68,10 @@ function ToolActivityRow({ activity }: { activity: ToolActivity }) {
   // collapses back and stops competing with the reply for attention.
   const streaming = activity.status === "running" && Boolean(activity.output);
   const open = expanded || streaming;
+
+  // Only for a finished write — mid-write the file has no new revision yet, so
+  // there is nothing to diff against.
+  const editedPath = activity.status === "ok" ? writtenPath(activity) : null;
 
   return (
     <li className="animate-in overflow-hidden rounded-lg border border-line bg-panel/60">
@@ -86,6 +116,12 @@ function ToolActivityRow({ activity }: { activity: ToolActivity }) {
       {open ? (
         activity.output ? (
           <CommandLog text={activity.output} live={activity.status === "running"} />
+        ) : editedPath && sessionId ? (
+          // A write is only meaningful as a diff. Raw arguments would show the
+          // whole new file with no indication of what actually changed.
+          <div className="border-t border-line bg-canvas p-2">
+            <ChangedFileDiff sessionId={sessionId} path={editedPath} against="previous" />
+          </div>
         ) : (
           <pre className="max-h-56 overflow-auto border-t border-line bg-canvas px-3 py-2.5 font-mono text-[12px] leading-relaxed text-ink-soft">
             {JSON.stringify(activity.input, null, 2)}

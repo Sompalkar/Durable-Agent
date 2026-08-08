@@ -31,12 +31,14 @@ const SUGGESTIONS = [
 ];
 
 export function ChatPanel({
+  sessionId,
   messages,
   stream,
   proposals,
   plan,
   onSend,
 }: {
+  sessionId: string;
   messages: TranscriptMessage[];
   stream: AgentStream;
   proposals: Proposal[];
@@ -87,6 +89,7 @@ export function ChatPanel({
               // Saved with ordering — render the real sequence.
               <div key={message.id} className="animate-in space-y-2">
                 <TurnTimeline
+                  sessionId={sessionId}
                   segments={message.segments.map((segment) =>
                     segment.kind === "tool"
                       ? {
@@ -102,6 +105,7 @@ export function ChatPanel({
               <AssistantMessage key={message.id} text={message.text}>
                 <ToolActivityList
                   activities={(message.tools ?? []).map(toolRecordToActivity)}
+                  sessionId={sessionId}
                 />
               </AssistantMessage>
             ),
@@ -118,6 +122,7 @@ export function ChatPanel({
             <div className="animate-in space-y-2">
               <ThinkingPanel text={stream.thinkingText} />
               <TurnTimeline
+                sessionId={sessionId}
                 segments={stream.segments}
                 streaming={stream.streaming}
               />

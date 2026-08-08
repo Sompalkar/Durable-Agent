@@ -7,7 +7,7 @@
  * creates a revision — which is why the history list sits right underneath.
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import {
   classNames,
@@ -39,6 +39,21 @@ export function FileViewer({
   const [draft, setDraft] = useState(file.content);
   const [saving, setSaving] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  // Reset when the file changes, so a pending confirm cannot carry over and
+  // delete a different file than the one it was aimed at.
+  const [lastPath, setLastPath] = useState(file.path);
+  if (file.path !== lastPath) {
+    setLastPath(file.path);
+    setConfirmDelete(false);
+  }
+
+  useEffect(() => {
+    if (!confirmDelete) return;
+    const timer = setTimeout(() => setConfirmDelete(false), 4000);
+    return () => clearTimeout(timer);
+  }, [confirmDelete]);
   /** The revision being compared against the current contents, if any. */
   const [diff, setDiff] = useState<{ version: number; content: string } | null>(null);
 
@@ -96,9 +111,25 @@ export function FileViewer({
         >
           <HistoryIcon className="h-4 w-4" />
         </IconButton>
-        <IconButton label="Delete file" variant="danger" onClick={() => void onDelete()}>
-          <TrashIcon className="h-4 w-4" />
-        </IconButton>
+        {/* Two steps, because this sits next to Close and History and deletes
+            work the agent may have just produced. The confirm state times out
+            so a stray first click does not leave a live delete button waiting. */}
+        {confirmDelete ? (
+          <button
+            onClick={() => void onDelete()}
+            className="shrink-0 rounded-lg border border-negative/40 bg-negative/10 px-2 py-1 text-[11px] font-medium text-negative transition-colors hover:bg-negative/20"
+          >
+            Delete?
+          </button>
+        ) : (
+          <IconButton
+            label="Delete file"
+            variant="danger"
+            onClick={() => setConfirmDelete(true)}
+          >
+            <TrashIcon className="h-4 w-4" />
+          </IconButton>
+        )}
         <IconButton label="Close file" onClick={onClose}>
           <CloseIcon className="h-4 w-4" />
         </IconButton>
