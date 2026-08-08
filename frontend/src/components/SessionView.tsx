@@ -20,7 +20,7 @@ import type {
   TranscriptMessage,
   TurnUsage,
 } from "@/lib/types";
-import { useAgentStream } from "@/lib/useAgentStream";
+import { useAgentStream, type TurnSegment } from "@/lib/useAgentStream";
 import { useArchive } from "@/lib/useArchive";
 import { useRepo } from "@/lib/useRepo";
 import { useBrain } from "@/lib/useBrain";
@@ -132,7 +132,12 @@ export function SessionView({ sessionId }: { sessionId: string }) {
 
   /** Move the finished turn out of the stream and into the transcript. */
   const handleComplete = useCallback(
-    (text: string, _usage: TurnUsage, activities: ToolActivity[]) => {
+    (
+      text: string,
+      _usage: TurnUsage,
+      activities: ToolActivity[],
+      segments: TurnSegment[],
+    ) => {
       if (text || activities.length > 0) {
         setMessages((current) => [
           ...current,
@@ -149,6 +154,24 @@ export function SessionView({ sessionId }: { sessionId: string }) {
               summary: activity.summary ?? "",
               durationMs: activity.durationMs ?? 0,
             })),
+            // Carried over from the live stream so the finished turn keeps the
+            // order it was shown in. The server stores the same thing, so a
+            // reload renders identically.
+            segments: segments.map((segment) =>
+              segment.kind === "text"
+                ? segment
+                : {
+                    kind: "tool" as const,
+                    tool: {
+                      id: segment.activity.id,
+                      name: segment.activity.name,
+                      input: segment.activity.input,
+                      ok: segment.activity.status !== "failed",
+                      summary: segment.activity.summary ?? "",
+                      durationMs: segment.activity.durationMs ?? 0,
+                    },
+                  },
+            ),
           },
         ]);
       }

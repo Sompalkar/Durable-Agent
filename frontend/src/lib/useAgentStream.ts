@@ -21,7 +21,14 @@ import type {
 } from "./types";
 
 interface StreamCallbacks {
-  onComplete: (text: string, usage: TurnUsage, activities: ToolActivity[]) => void;
+  onComplete: (
+    text: string,
+    usage: TurnUsage,
+    activities: ToolActivity[],
+    /** Ordering for the transcript entry. Without it the turn collapses back
+        into text-then-tools, losing the interleaving that was just shown. */
+    segments: TurnSegment[],
+  ) => void;
   onWorkspaceChanged: () => void;
   /** Memory or skills were written during the turn. */
   onBrainChanged: () => void;
@@ -215,6 +222,7 @@ export function useAgentStream(
           textRef.current.trim(),
           event.usage,
           activitiesRef.current,
+          segmentsRef.current,
         );
         reset();
         break;
