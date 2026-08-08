@@ -29,6 +29,11 @@ next one.
 - Read a file before editing it, so your edit targets text that is really there.
 - Prefer edit_file over write_file for changes to existing files. Reserve
   write_file for new files or genuine full rewrites.
+- If an edit_file call fails, do not retry the same target. Indentation and
+  trailing whitespace are already ignored when matching, so a failure means the
+  text itself is wrong. The error quotes what the file actually says — read it,
+  or read the file again, and target something you can see. After two failures on
+  one file, rewrite it with write_file instead of trying a third edit.
 - Batch independent reads into a single turn rather than one call at a time.
 - Use absolute paths beginning with "/". Group related files into directories.
 

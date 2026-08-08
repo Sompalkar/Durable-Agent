@@ -104,6 +104,11 @@ export async function runAgentTurn(options: RunOptions): Promise<RunResult> {
 
 	emit({ type: 'turn_start' });
 
+	// Tracks whether the loop ended because the model was finished or because it
+	// ran out of iterations. Those look identical to a caller otherwise, and the
+	// second one needs saying out loud.
+	let exhausted = true;
+
 	for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
 		// Collapse stale tool output before sending. The stored transcript keeps
 		// everything; only what the model re-reads is trimmed.
@@ -179,6 +184,7 @@ export async function runAgentTurn(options: RunOptions): Promise<RunResult> {
 
 		if (message.stop_reason === 'refusal') {
 			emit({ type: 'error', message: 'The model declined this request.' });
+			exhausted = false;
 			break;
 		}
 
@@ -189,7 +195,10 @@ export async function runAgentTurn(options: RunOptions): Promise<RunResult> {
 		const toolUses = message.content.filter(
 			(block): block is Anthropic.ToolUseBlock => block.type === 'tool_use',
 		);
-		if (toolUses.length === 0) break;
+		if (toolUses.length === 0) {
+			exhausted = false;
+			break;
+		}
 
 		// Tool calls in one assistant message are independent, so run them
 		// concurrently and return every result in a single user message.
@@ -261,6 +270,18 @@ export async function runAgentTurn(options: RunOptions): Promise<RunResult> {
 		const resultMessage: Anthropic.MessageParam = { role: 'user', content: toolResults };
 		messages.push(resultMessage);
 		newMessages.push(resultMessage);
+	}
+
+	// Hitting the ceiling mid-task used to end the turn with no explanation: the
+	// last thing on screen was a tool call, and nothing said why nothing followed.
+	if (exhausted) {
+		stopReason = 'max_iterations';
+		const note =
+			`Stopped after ${MAX_ITERATIONS} steps in one turn, before finishing. ` +
+			`Everything done so far is saved — send another message to carry on from here.`;
+		assistantText += (assistantText.endsWith('\n') || assistantText === '' ? '' : '\n\n') + note;
+		segments.push({ kind: 'text', text: note });
+		emit({ type: 'text_delta', text: `\n\n${note}` });
 	}
 
 	const proposals = [...context.proposals];
