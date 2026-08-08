@@ -7,6 +7,11 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 
+function messageOf(error: unknown): string {
+	if (error instanceof Error) return `${error.message} ${String(error.cause ?? '')}`;
+	return String(error);
+}
+
 export function describeAgentError(error: unknown): string {
 	if (error instanceof Anthropic.AuthenticationError) {
 		return 'The Anthropic API key was rejected. Set ANTHROPIC_API_KEY in backend/.dev.vars (or as a Worker secret) and restart.';
@@ -35,6 +40,15 @@ export function describeAgentError(error: unknown): string {
 		/prompt is too long|context.{0,10}(window|length)|maximum.{0,20}tokens/i.test(error.message)
 	) {
 		return 'This conversation has outgrown the model’s context window. Start a new session — your files, memory, and skills all carry over.';
+	}
+	// Cloudflare refuses further outbound calls once the invocation's subrequest
+	// budget is spent, and the SDK reports that as a connection failure. Saying
+	// "check your network" sends people to look in entirely the wrong place.
+	if (/too many subrequests/i.test(messageOf(error))) {
+		return (
+			'This turn ran out of Cloudflare subrequests — too many shell commands ' +
+			'or tool calls in one turn. Start a new turn to continue; the work so far is saved.'
+		);
 	}
 	if (error instanceof Anthropic.APIConnectionError) {
 		return 'Could not reach the Anthropic API. Check the Worker’s network access.';

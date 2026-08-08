@@ -65,6 +65,21 @@ Change as little as possible. A reviewer reads a diff, and every unrelated edit
 costs you their attention. Do not reformat files you did not need to touch, and
 do not fix things nobody asked about.
 
+# What the sandbox cannot do
+
+You are not root. apt-get, yum and brew will fail — do not try them, and do not
+try to work around a missing tool by installing it. The GitHub CLI is not
+installed either.
+
+You also do not need it. You have no way to reach GitHub from the shell, and no
+reason to: opening a pull request is a button the user presses once you have
+made the change. Your job ends at a working diff.
+
+Shell commands are expensive and limited per turn. Prefer the file tools, and
+run a command only when you genuinely need to execute something — installing
+dependencies, running tests, a build. If a command fails twice for the same
+reason, stop and say so rather than trying a third way around it.
+
 # Memory
 
 There are two stores, and mixing them makes both useless.

@@ -53,8 +53,21 @@ const MARKER = '/tmp/.agent-run-marker';
 const LOG_FILE = '/tmp/.agent-run.log';
 const EXIT_FILE = '/tmp/.agent-run.exit';
 
-/** How often to ask for new output. Every poll is an API call, so not too eager. */
-const POLL_INTERVAL_MS = 1_200;
+/**
+ * How often to ask for new output.
+ *
+ * Every poll is a subrequest, and a Worker invocation gets 50 of them on the
+ * free plan — shared with the model calls, the tool calls and the sandbox
+ * setup. A fixed 1.2s interval means a two-minute command spends a hundred
+ * subrequests on polling alone and dies partway through.
+ *
+ * So the interval backs off: responsive while somebody is still watching
+ * closely, then progressively cheaper as a command turns out to be long. A
+ * five-minute command costs about 25 polls instead of 250.
+ */
+const POLL_START_MS = 1_000;
+const POLL_MAX_MS = 15_000;
+const POLL_BACKOFF = 1.35;
 
 /** Separates the log tail from the exit code in a single polling response. */
 const POLL_DELIMITER = '\n<<<AGENT_EXIT>>>';
@@ -167,10 +180,11 @@ export class DaytonaSandbox implements SandboxProvider {
 
 		let offset = 0;
 		let output = '';
+		let interval = POLL_START_MS;
 		const deadline = Date.now() + timeoutSeconds * 1000;
 
 		while (Date.now() < deadline) {
-			await sleep(POLL_INTERVAL_MS);
+			await sleep(interval);
 
 			// One call gets both the new bytes and the finished-or-not answer. Two
 			// calls would double the polling cost for no extra information.
@@ -183,6 +197,12 @@ export class DaytonaSandbox implements SandboxProvider {
 			const marker = poll.stdout.lastIndexOf(POLL_DELIMITER);
 			const chunk = marker === -1 ? poll.stdout : poll.stdout.slice(0, marker);
 			const exitText = marker === -1 ? '' : poll.stdout.slice(marker + POLL_DELIMITER.length).trim();
+
+			// Output means something is happening, so stay responsive. Silence means
+			// a long compile or install, where nobody is reading every line anyway.
+			interval = chunk
+				? POLL_START_MS
+				: Math.min(POLL_MAX_MS, Math.round(interval * POLL_BACKOFF));
 
 			if (chunk) {
 				offset += byteLengthOf(chunk);
