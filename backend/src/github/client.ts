@@ -223,6 +223,15 @@ export class GitHubClient {
 			.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 	}
 
+	/** File a new issue. */
+	async createIssue(title: string, body: string): Promise<{ number: number; url: string }> {
+		const data = await this.request<{ number: number; html_url: string }>(
+			`/repos/${this.slug()}/issues`,
+			{ method: 'POST', body: { title, body } },
+		);
+		return { number: data.number, url: data.html_url };
+	}
+
 	/** Leave a reply on the pull request thread. */
 	async comment(number: number, body: string): Promise<void> {
 		await this.request(`/repos/${this.slug()}/issues/${number}/comments`, {

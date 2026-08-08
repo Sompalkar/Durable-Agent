@@ -638,6 +638,7 @@ export class AgentSessionDO extends DurableObject<Env> {
 		return {
 			fullName: stored.fullName,
 			installCommand: stored.installCommand,
+			token: credentials.token,
 			checkout: {
 				cloneUrl: `https://x-access-token:${credentials.token}@github.com/${stored.fullName}.git`,
 				branch: stored.branch,

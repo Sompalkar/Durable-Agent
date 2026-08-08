@@ -397,11 +397,43 @@ const SANDBOX_TOOLS: Anthropic.Tool[] = [
 	},
 ];
 
+/** Offered only when a repository is attached — otherwise there is no repo to file against. */
+const GITHUB_TOOLS: Anthropic.Tool[] = [
+	{
+		name: 'github_create_issue',
+		description:
+			'Open an issue on the attached repository. Use this only when the user explicitly ' +
+			'asks for an issue to be filed — it is visible to everyone watching the repo, so it ' +
+			'is not something to do on your own initiative. ' +
+			'This is the only way you can reach GitHub: there is no gh CLI and the shell has no ' +
+			'network access to it.',
+		input_schema: {
+			type: 'object',
+			properties: {
+				title: { type: 'string', description: 'One line. What is wrong or what is wanted.' },
+				body: {
+					type: 'string',
+					description:
+						'Markdown. Enough for someone else to act on it without asking you questions.',
+				},
+			},
+			required: ['title', 'body'],
+		},
+	},
+];
+
 /**
- * Assemble the tool list for a turn. `run_command` appears only when a sandbox
- * is actually available.
+ * Assemble the tool list for a turn.
+ *
+ * `run_command` appears only when a sandbox exists, and the GitHub tools only
+ * when a repository is attached. The agent is never shown a tool this
+ * deployment cannot back — being told plainly that it has no shell is far
+ * better than letting it discover that by failing.
  */
-export function buildToolDefinitions(options: { sandbox: boolean }): Anthropic.Tool[] {
+export function buildToolDefinitions(options: {
+	sandbox: boolean;
+	repo: boolean;
+}): Anthropic.Tool[] {
 	return [
 		...FILE_TOOLS,
 		...MEMORY_TOOLS,
@@ -409,6 +441,7 @@ export function buildToolDefinitions(options: { sandbox: boolean }): Anthropic.T
 		...SCHEDULE_TOOLS,
 		...PROPOSAL_TOOLS,
 		...(options.sandbox ? SANDBOX_TOOLS : []),
+		...(options.repo ? GITHUB_TOOLS : []),
 	];
 }
 

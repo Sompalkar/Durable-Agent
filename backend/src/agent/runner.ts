@@ -84,7 +84,10 @@ export async function runAgentTurn(options: RunOptions): Promise<RunResult> {
 	let escalations = 0;
 	const usageByModel: Record<string, TurnUsage> = {};
 
-	const toolDefinitions = buildToolDefinitions({ sandbox: context.sandbox !== null });
+	const toolDefinitions = buildToolDefinitions({
+		sandbox: context.sandbox !== null,
+		repo: context.repo !== null,
+	});
 	const contextBlock = buildContextBlock({
 		memories: options.memories,
 		repoMemories: options.repoMemories,

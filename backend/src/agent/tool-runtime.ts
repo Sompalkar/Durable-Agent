@@ -13,6 +13,7 @@ import type { BrainDO, MemoryCategory } from '../durable-objects/brain-do';
 import type { Cadence, SchedulerDO } from '../durable-objects/scheduler-do';
 import type { WorkspaceDO } from '../durable-objects/workspace-do';
 import type { AgentEvent, PlanStatus, PlanStep, Proposal, ToolOutcome } from '../types';
+import { GitHubClient } from '../github/client';
 import type { RepoCheckout, SandboxProvider } from './sandbox';
 
 /** Everything a tool might need, assembled once per turn. */
@@ -70,6 +71,14 @@ export interface RepoContext {
 	checkout: RepoCheckout;
 	/** Detected from the repo's manifest at import time, e.g. `npm ci`. */
 	installCommand: string;
+	/**
+	 * The user's GitHub token.
+	 *
+	 * Held separately rather than parsed back out of the clone URL — a tool that
+	 * has to reverse-engineer a credential from a string is a tool one refactor
+	 * away from leaking it into a log.
+	 */
+	token: string;
 }
 
 export interface CommandRecord {
@@ -297,6 +306,27 @@ const HANDLERS: Record<string, ToolHandler> = {
 	async load_skill(input, { brain }) {
 		const skill = await brain.loadSkill(requireString(input.name, 'name'));
 		return ok(`# Skill: ${skill.name}\n${skill.description}\n\n${skill.body}`, `loaded ${skill.name}`);
+	},
+
+	// ---------------------------------------------------------------- github
+
+	async github_create_issue(input, { repo }) {
+		if (!repo) {
+			throw new Error('No repository is attached, so there is nowhere to file an issue.');
+		}
+
+		const [owner, name] = repo.fullName.split('/') as [string, string];
+		const client = new GitHubClient(repo.token, owner, name);
+
+		const issue = await client.createIssue(
+			requireString(input.title, 'title'),
+			requireString(input.body, 'body'),
+		);
+
+		return ok(
+			`Opened issue #${issue.number} on ${repo.fullName}: ${issue.url}`,
+			`opened #${issue.number}`,
+		);
 	},
 
 	// -------------------------------------------------------------- schedule
