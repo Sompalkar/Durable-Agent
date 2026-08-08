@@ -13,6 +13,9 @@
 
 const API = 'https://api.github.com';
 
+/** Tar works in fixed 512-byte blocks. */
+const BLOCK = 512;
+
 export class GitHubError extends Error {
 	constructor(
 		message: string,
@@ -135,6 +138,38 @@ export class GitHubClient {
 			throw new GitHubError(`Unexpected blob encoding: ${data.encoding}`, 500);
 		}
 		return decodeBase64(data.content);
+	}
+
+	/**
+	 * The whole repository, in one request.
+	 *
+	 * Fetching blobs one at a time is the obvious implementation and it does not
+	 * survive contact with Cloudflare: a Worker gets 50 subrequests per
+	 * invocation on the free plan, and a 200-file import needs 200. The tarball
+	 * endpoint returns everything in a single response, which is both legal and
+	 * far faster.
+	 *
+	 * Gzip is undone by the platform's own `DecompressionStream`, and tar is a
+	 * simple enough format to walk by hand — 512-byte header, then the content
+	 * padded to the next 512-byte boundary.
+	 */
+	async tarball(ref: string): Promise<Map<string, string>> {
+		const response = await fetch(`${API}/repos/${this.slug()}/tarball/${ref}`, {
+			headers: {
+				Authorization: `Bearer ${this.token}`,
+				Accept: 'application/vnd.github+json',
+				'User-Agent': 'durable-agent',
+			},
+			// GitHub redirects to codeload; fetch follows it for us.
+			signal: AbortSignal.timeout(60_000),
+		});
+
+		if (!response.ok || !response.body) {
+			throw new GitHubError(`Could not download the repository (${response.status}).`, response.status);
+		}
+
+		const unzipped = response.body.pipeThrough(new DecompressionStream('gzip'));
+		return parseTar(await new Response(unzipped).arrayBuffer());
 	}
 
 	/**
@@ -357,6 +392,62 @@ export class GitHubClient {
 		if (response.status === 204) return undefined as T;
 		return (await response.json()) as T;
 	}
+}
+
+/**
+ * Files in a tar archive, keyed by path with the top-level directory stripped.
+ *
+ * Exported so it can be checked against a real archive without a token or a
+ * running stack — it is the only hand-rolled binary parsing in the codebase.
+ */
+export function parseTar(buffer: ArrayBuffer): Map<string, string> {
+	const bytes = new Uint8Array(buffer);
+	const decoder = new TextDecoder();
+	const files = new Map<string, string>();
+
+	let offset = 0;
+	while (offset + BLOCK <= bytes.length) {
+		const header = bytes.subarray(offset, offset + BLOCK);
+
+		// Two consecutive zero blocks mark the end. One is enough to stop on.
+		if (header.every((byte) => byte === 0)) break;
+
+		const name = readString(header, 0, 100, decoder);
+		const prefix = readString(header, 345, 155, decoder);
+		const size = parseInt(readString(header, 124, 12, decoder) || '0', 8) || 0;
+		const type = String.fromCharCode(header[156] ?? 0);
+
+		offset += BLOCK;
+
+		// '0' and NUL both mean a regular file. Directories, symlinks and the
+		// long-name extensions are skipped — the import only wants source text.
+		if (type === '0' || type === '\0') {
+			const full = prefix ? `${prefix}/${name}` : name;
+			// The archive nests everything under `owner-repo-sha/`, which is not
+			// part of any path in the repository itself.
+			const path = full.slice(full.indexOf('/') + 1);
+			if (path) {
+				files.set(path, decoder.decode(bytes.subarray(offset, offset + size)));
+			}
+		}
+
+		// Content is padded up to the next block boundary.
+		offset += Math.ceil(size / BLOCK) * BLOCK;
+	}
+
+	return files;
+}
+
+/** A NUL-terminated fixed-width field. */
+function readString(
+	block: Uint8Array,
+	start: number,
+	length: number,
+	decoder: TextDecoder,
+): string {
+	const field = block.subarray(start, start + length);
+	const end = field.indexOf(0);
+	return decoder.decode(end === -1 ? field : field.subarray(0, end)).trim();
 }
 
 function parseGitHubMessage(body: string): string | null {

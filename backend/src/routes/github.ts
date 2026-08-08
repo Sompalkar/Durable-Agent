@@ -143,23 +143,27 @@ githubRoutes.post('/:id/github/attach', async (c) => {
 			issueTitle: issue?.title ?? null,
 		});
 
-		// Import a readable subset into the workspace. The sandbox has the full
-		// checkout; this is so the agent can browse and edit without paying for a
-		// container on every read.
+		// Import a readable subset into the workspace.
+		//
+		// The whole repository arrives as one tarball rather than one request per
+		// file. A Worker gets 50 subrequests per invocation on the free plan, so
+		// the file-by-file version died at "Too many subrequests" long before it
+		// finished — and this is faster besides.
 		const plan = planImport(tree);
+		const wanted = new Set(plan.include.map((entry) => entry.path));
+		const archive = await client.tarball(commitSha);
+
 		const workspace = workspaceStub(c.env, user.id, sessionId);
 		await workspace.clear();
 
-		// Fetched in batches. All at once would open two hundred sockets and get
-		// us rate limited; one at a time would take minutes.
-		for (let index = 0; index < plan.include.length; index += 10) {
-			const batch = plan.include.slice(index, index + 10);
-			const contents = await Promise.all(batch.map((entry) => client.blob(entry.sha)));
-			await Promise.all(
-				batch.map((entry, position) =>
-					workspace.write(`/${entry.path}`, contents[position] ?? '', 'imported from GitHub'),
-				),
-			);
+		const files = [...archive]
+			.filter(([path]) => wanted.has(path))
+			.map(([path, content]) => ({ path: `/${path}`, content }));
+
+		// One Durable Object call, for the same reason: each one is a subrequest.
+		const { written, skipped } = await workspace.writeMany(files, 'imported from GitHub');
+		if (skipped.length > 0) {
+			console.warn(`Skipped ${skipped.length} file(s) the workspace rejected.`);
 		}
 
 		return c.json({
@@ -172,7 +176,7 @@ githubRoutes.post('/:id/github/attach', async (c) => {
 				issueTitle: issue?.title ?? null,
 			},
 			imported: {
-				files: plan.include.length,
+				files: written,
 				bytes: plan.totalBytes,
 				summary: describeImport(plan, slug),
 			},

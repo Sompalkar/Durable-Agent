@@ -79,6 +79,36 @@ export class WorkspaceDO extends DurableObject<Env> {
 		return this.fs.write(path, content, summary);
 	}
 
+	/**
+	 * Write many files in one call.
+	 *
+	 * Not a convenience. Every call into a Durable Object counts against the
+	 * Worker's subrequest budget — 50 per invocation on the free plan — so
+	 * importing a repository file by file exhausts it long before the repository
+	 * is imported. One call writes all of them.
+	 *
+	 * Files too large for the workspace are skipped rather than failing the whole
+	 * import; their names come back so the caller can say what was left out.
+	 */
+	async writeMany(
+		files: Array<{ path: string; content: string }>,
+		summary?: string,
+	): Promise<{ written: number; skipped: string[] }> {
+		const skipped: string[] = [];
+		let written = 0;
+
+		for (const file of files) {
+			try {
+				this.fs.write(file.path, file.content, summary);
+				written += 1;
+			} catch {
+				skipped.push(file.path);
+			}
+		}
+
+		return { written, skipped };
+	}
+
 	async edit(path: string, oldText: string, newText: string): Promise<FileRecord> {
 		return this.fs.edit(path, oldText, newText).record;
 	}
