@@ -45,7 +45,7 @@ export function AssistantMessage({
 }
 
 /** Splits text into fenced code blocks and prose. */
-function MessageBody({
+export function MessageBody({
   text,
   streaming,
 }: {

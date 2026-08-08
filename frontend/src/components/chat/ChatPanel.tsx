@@ -20,6 +20,7 @@ import { AssistantMessage, UserMessage } from "./Message";
 import { Composer } from "./Composer";
 import { PlanStrip } from "./PlanStrip";
 import { Proposals } from "./Proposals";
+import { TurnTimeline } from "./TurnTimeline";
 import { ThinkingPanel } from "./ThinkingPanel";
 import { ToolActivityList } from "./ToolActivityList";
 
@@ -82,7 +83,22 @@ export function ChatPanel({
                 {message.trigger ? <TriggerBadge label={message.trigger} /> : null}
                 <UserMessage text={message.text} />
               </div>
+            ) : message.segments && message.segments.length > 0 ? (
+              // Saved with ordering — render the real sequence.
+              <div key={message.id} className="animate-in space-y-2">
+                <TurnTimeline
+                  segments={message.segments.map((segment) =>
+                    segment.kind === "tool"
+                      ? {
+                          kind: "tool" as const,
+                          activity: toolRecordToActivity(segment.tool),
+                        }
+                      : segment,
+                  )}
+                />
+              </div>
             ) : (
+              // Older turns kept only text and a flat tool list.
               <AssistantMessage key={message.id} text={message.text}>
                 <ToolActivityList
                   activities={(message.tools ?? []).map(toolRecordToActivity)}
@@ -99,10 +115,13 @@ export function ChatPanel({
           {stream.streaming ||
           stream.activities.length > 0 ||
           stream.assistantText ? (
-            <AssistantMessage text={stream.assistantText} streaming={stream.streaming}>
+            <div className="animate-in space-y-2">
               <ThinkingPanel text={stream.thinkingText} />
-              <ToolActivityList activities={stream.activities} />
-            </AssistantMessage>
+              <TurnTimeline
+                segments={stream.segments}
+                streaming={stream.streaming}
+              />
+            </div>
           ) : null}
 
           {stream.error ? (

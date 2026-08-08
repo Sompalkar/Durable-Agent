@@ -38,6 +38,7 @@ import type {
 	StoredRepo,
 	ToolRecord,
 	TranscriptMessage,
+	TurnSegment,
 } from '../types';
 import type { BrainDO } from './brain-do';
 import type { SchedulerDO } from './scheduler-do';
@@ -63,6 +64,7 @@ interface TranscriptRow extends Record<string, SqlStorageValue> {
 	role: string;
 	text: string;
 	tools: string | null;
+	segments: string | null;
 	trigger: string | null;
 	created_at: number;
 }
@@ -102,10 +104,18 @@ export class AgentSessionDO extends DurableObject<Env> {
 				role       TEXT    NOT NULL,
 				text       TEXT    NOT NULL,
 				tools      TEXT,
+				segments   TEXT,
 				trigger    TEXT,
 				created_at INTEGER NOT NULL
 			);
 		`);
+		// Objects created before ordered segments existed keep working: the
+		// column is added if missing, and rows without it fall back to text+tools.
+		try {
+			sql.exec('ALTER TABLE transcript ADD COLUMN segments TEXT');
+		} catch {
+			// Already present.
+		}
 	}
 
 	// ------------------------------------------------------------- lifecycle
@@ -355,6 +365,9 @@ export class AgentSessionDO extends DurableObject<Env> {
 				text: row.text,
 				createdAt: row.created_at,
 				tools: row.tools ? (JSON.parse(row.tools) as ToolRecord[]) : undefined,
+				segments: row.segments
+					? (JSON.parse(row.segments) as TurnSegment[])
+					: undefined,
 				trigger: row.trigger ?? undefined,
 			}));
 	}
@@ -562,7 +575,7 @@ export class AgentSessionDO extends DurableObject<Env> {
 			this.appendMessage(message.role, message.content);
 		}
 		if (result.text || result.tools.length > 0) {
-			this.appendTranscript('assistant', result.text, result.tools, trigger);
+			this.appendTranscript('assistant', result.text, result.tools, trigger, result.segments);
 		}
 
 		// Stop the container as soon as the turn ends. Booting costs ~2s; leaving
@@ -705,12 +718,14 @@ export class AgentSessionDO extends DurableObject<Env> {
 		text: string,
 		tools?: ToolRecord[],
 		trigger?: string | null,
+		segments?: TurnSegment[],
 	): void {
 		this.ctx.storage.sql.exec(
-			'INSERT INTO transcript (role, text, tools, trigger, created_at) VALUES (?1, ?2, ?3, ?4, ?5)',
+			'INSERT INTO transcript (role, text, tools, segments, trigger, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)',
 			role,
 			text,
 			tools && tools.length > 0 ? JSON.stringify(tools) : null,
+			segments && segments.length > 0 ? JSON.stringify(segments) : null,
 			trigger ?? null,
 			Date.now(),
 		);

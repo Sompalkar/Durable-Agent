@@ -165,9 +165,19 @@ export interface TranscriptMessage {
   createdAt: number;
   /** Tools used during this turn. Present for both live and replayed turns. */
   tools?: ToolRecord[];
+  /**
+   * The turn as an ordered timeline of text and tools. Present on turns saved
+   * after this feature shipped; older turns fall back to text + tools.
+   */
+  segments?: PersistedSegment[];
   /** Set when a schedule started the turn rather than the user. */
   trigger?: string;
 }
+
+/** A stored turn segment. The live equivalent carries a ToolActivity instead. */
+export type PersistedSegment =
+  | { kind: "text"; text: string }
+  | { kind: "tool"; tool: ToolRecord };
 
 // ------------------------------------------------------------------ workspace
 

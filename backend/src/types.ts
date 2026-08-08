@@ -165,6 +165,17 @@ export interface StoredRepo {
 	issueTitle: string | null;
 }
 
+/**
+ * One piece of a turn, in the order it happened.
+ *
+ * A turn is a sequence — the model says something, calls a tool, says more —
+ * not a pile of text and a separate pile of tools. Storing the order is what
+ * lets a reloaded transcript read like the work instead of a summary of it.
+ */
+export type TurnSegment =
+	| { kind: 'text'; text: string }
+	| { kind: 'tool'; tool: ToolRecord };
+
 /** One tool call, persisted so replayed history shows the work, not just the reply. */
 export interface ToolRecord {
 	id: string;

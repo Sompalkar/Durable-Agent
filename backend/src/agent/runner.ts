@@ -8,7 +8,7 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk';
-import type { AgentEvent, PlanStep, Proposal, ToolRecord, TurnUsage } from '../types';
+import type { AgentEvent, PlanStep, Proposal, ToolRecord, TurnSegment, TurnUsage } from '../types';
 import type { Memory, Skill } from '../durable-objects/brain-do';
 import { DEFAULT_PRUNE, estimateTokens, pruneContext } from './context';
 import { findModel, isRouted, modelForStep } from './models';
@@ -51,6 +51,8 @@ export interface RunResult {
 	/** Concatenated assistant text, used as the transcript's rendered reply. */
 	text: string;
 	tools: ToolRecord[];
+	/** The same turn as an ordered timeline of text and tools. */
+	segments: TurnSegment[];
 	proposals: Proposal[];
 	/** The checklist as it stood when the turn ended. */
 	plan: PlanStep[];
@@ -72,6 +74,9 @@ export async function runAgentTurn(options: RunOptions): Promise<RunResult> {
 	const messages = [...options.messages];
 	const newMessages: Anthropic.MessageParam[] = [];
 	const tools: ToolRecord[] = [];
+	// The turn as an ordered timeline, alongside the flat lists the archive and
+	// pull-request body still use.
+	const segments: TurnSegment[] = [];
 	const usage: TurnUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 };
 
 	let assistantText = '';
@@ -143,10 +148,15 @@ export async function runAgentTurn(options: RunOptions): Promise<RunResult> {
 			messages: sendable,
 		});
 
+		// Text produced in *this* iteration, so it can become one ordered segment
+		// before the tools it introduces — `assistantText` is the whole turn.
+		let iterationText = '';
+
 		for await (const event of stream) {
 			if (event.type !== 'content_block_delta') continue;
 			if (event.delta.type === 'text_delta') {
 				assistantText += event.delta.text;
+				iterationText += event.delta.text;
 				emit({ type: 'text_delta', text: event.delta.text });
 			} else if (event.delta.type === 'thinking_delta') {
 				emit({ type: 'thinking_delta', text: event.delta.thinking });
@@ -170,6 +180,10 @@ export async function runAgentTurn(options: RunOptions): Promise<RunResult> {
 		if (message.stop_reason === 'refusal') {
 			emit({ type: 'error', message: 'The model declined this request.' });
 			break;
+		}
+
+		if (iterationText.trim()) {
+			segments.push({ kind: 'text', text: iterationText });
 		}
 
 		const toolUses = message.content.filter(
@@ -202,14 +216,16 @@ export async function runAgentTurn(options: RunOptions): Promise<RunResult> {
 				summary: outcome.summary,
 				durationMs,
 			});
-			tools.push({
+			const record: ToolRecord = {
 				id: toolUse.id,
 				name: toolUse.name,
 				input: toolUse.input,
 				ok: outcome.ok,
 				summary: outcome.summary,
 				durationMs,
-			});
+			};
+			tools.push(record);
+			segments.push({ kind: 'tool', tool: record });
 
 			if (outcome.ok) {
 				if (MUTATING_TOOLS.has(toolUse.name)) workspaceChanged = true;
@@ -255,6 +271,7 @@ export async function runAgentTurn(options: RunOptions): Promise<RunResult> {
 		newMessages,
 		text: assistantText.trim(),
 		tools,
+		segments,
 		proposals,
 		plan: [...context.plan],
 		usage,

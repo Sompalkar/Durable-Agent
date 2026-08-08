@@ -402,11 +402,13 @@ const GITHUB_TOOLS: Anthropic.Tool[] = [
 	{
 		name: 'github_create_issue',
 		description:
-			'Open an issue on the attached repository. Use this only when the user explicitly ' +
-			'asks for an issue to be filed — it is visible to everyone watching the repo, so it ' +
-			'is not something to do on your own initiative. ' +
-			'This is the only way you can reach GitHub: there is no gh CLI and the shell has no ' +
-			'network access to it.',
+			'File a new ISSUE on the repository — a bug report or feature request. ' +
+			'This is NOT how you open a pull request. You cannot open a pull request yourself; ' +
+			'that is a button the user clicks. If the user asks you to open, create, or raise a ' +
+			'pull request, do not call this — finish your changes and tell them to press ' +
+			'"Open pull request". ' +
+			'Use this only when the user explicitly asks for an issue to be filed, since it is ' +
+			'visible to everyone watching the repo.',
 		input_schema: {
 			type: 'object',
 			properties: {

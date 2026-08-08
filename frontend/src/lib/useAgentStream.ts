@@ -38,10 +38,38 @@ export interface AgentStream {
   assistantText: string;
   thinkingText: string;
   activities: ToolActivity[];
+  /** The turn as an ordered timeline of text and tools. */
+  segments: TurnSegment[];
   error: string | null;
   send: (message: string) => Promise<void>;
   stop: () => void;
   dismissError: () => void;
+}
+
+/**
+ * One piece of a turn, in the order it happened.
+ *
+ * A turn is not "some text and some tools" — it is a sequence: the model says
+ * something, calls a tool, says more, calls another. Keeping that order is what
+ * makes the transcript read like the work rather than a summary of it.
+ */
+export type TurnSegment =
+  | { kind: "text"; text: string }
+  | { kind: "tool"; activity: ToolActivity };
+
+/** Update the tool activity inside a segment, matched by id. */
+function patchToolSegment(
+  ref: { current: TurnSegment[] },
+  set: (segments: TurnSegment[]) => void,
+  id: string,
+  update: (activity: ToolActivity) => ToolActivity,
+): void {
+  ref.current = ref.current.map((segment) =>
+    segment.kind === "tool" && segment.activity.id === id
+      ? { kind: "tool", activity: update(segment.activity) }
+      : segment,
+  );
+  set(ref.current);
 }
 
 export function useAgentStream(
@@ -52,12 +80,17 @@ export function useAgentStream(
   const [assistantText, setAssistantText] = useState("");
   const [thinkingText, setThinkingText] = useState("");
   const [activities, setActivities] = useState<ToolActivity[]>([]);
+  const [segments, setSegments] = useState<TurnSegment[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
   // Read inside the stream loop without making `send` depend on render state.
   const textRef = useRef("");
   const activitiesRef = useRef<ToolActivity[]>([]);
+  // The turn as it actually happened: text and tools in the order they arrived,
+  // rather than every tool in one pile and every sentence in another. The event
+  // stream is already ordered; this just stops the UI from flattening it.
+  const segmentsRef = useRef<TurnSegment[]>([]);
   // Held in a ref so `applyEvent` stays stable while still seeing the latest
   // callbacks. Assigned in an effect — refs must not be written during render.
   const callbacksRef = useRef(callbacks);
@@ -68,33 +101,56 @@ export function useAgentStream(
   const reset = useCallback(() => {
     textRef.current = "";
     activitiesRef.current = [];
+    segmentsRef.current = [];
     setAssistantText("");
     setThinkingText("");
     setActivities([]);
+    setSegments([]);
   }, []);
 
   const applyEvent = useCallback((event: AgentEvent) => {
     switch (event.type) {
-      case "text_delta":
+      case "text_delta": {
         textRef.current += event.text;
         setAssistantText(textRef.current);
+
+        const last = segmentsRef.current[segmentsRef.current.length - 1];
+        if (last?.kind === "text") {
+          // Same text run continuing — replace it in place.
+          segmentsRef.current = [
+            ...segmentsRef.current.slice(0, -1),
+            { kind: "text", text: last.text + event.text },
+          ];
+        } else {
+          segmentsRef.current = [
+            ...segmentsRef.current,
+            { kind: "text", text: event.text },
+          ];
+        }
+        setSegments(segmentsRef.current);
         break;
+      }
 
       case "thinking_delta":
         setThinkingText((current) => current + event.text);
         break;
 
       case "tool_call":
-        activitiesRef.current = [
-          ...activitiesRef.current,
-          {
+        {
+          const activity: ToolActivity = {
             id: event.id,
             name: event.name,
             input: event.input,
             status: "running",
-          },
-        ];
-        setActivities(activitiesRef.current);
+          };
+          activitiesRef.current = [...activitiesRef.current, activity];
+          segmentsRef.current = [
+            ...segmentsRef.current,
+            { kind: "tool", activity },
+          ];
+          setActivities(activitiesRef.current);
+          setSegments(segmentsRef.current);
+        }
         break;
 
       case "command_output":
@@ -106,6 +162,10 @@ export function useAgentStream(
             : activity,
         );
         setActivities(activitiesRef.current);
+        patchToolSegment(segmentsRef, setSegments, event.id, (a) => ({
+          ...a,
+          output: (a.output ?? "") + event.chunk,
+        }));
         break;
 
       case "tool_result":
@@ -120,6 +180,12 @@ export function useAgentStream(
             : activity,
         );
         setActivities(activitiesRef.current);
+        patchToolSegment(segmentsRef, setSegments, event.id, (a) => ({
+          ...a,
+          status: event.ok ? "ok" : "failed",
+          summary: event.summary,
+          durationMs: event.durationMs,
+        }));
         break;
 
       case "workspace_changed":
@@ -221,6 +287,7 @@ export function useAgentStream(
     assistantText,
     thinkingText,
     activities,
+    segments,
     error,
     send,
     stop,
