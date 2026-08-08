@@ -11,6 +11,11 @@ import { useAuth } from "@/lib/useAuth";
  * The app itself lives at /sessions; this is the front door. It shares the
  * app's design tokens (espresso surfaces, coral/clay accent, mono for data)
  * and the global light/dark theme applied on <html>.
+ *
+ * The pitch is the split runtime: a real Linux sandbox for execution, Durable
+ * Object SQLite for everything that has to outlive it. Leading with either half
+ * alone misrepresents the product — the sandbox sounds ordinary without the
+ * persistence, and the persistence sounds toy-like without the sandbox.
  * ------------------------------------------------------------------ */
 
 export default function LandingPage() {
@@ -20,9 +25,9 @@ export default function LandingPage() {
       <main>
         <Hero />
         <ProofBar />
-        <ProblemInsight />
+        <TwoRuntimes />
         <Features />
-        <Tradeoff />
+        <CloudLoop />
         <Architecture />
         <FinalCta />
       </main>
@@ -54,6 +59,9 @@ function Nav() {
           </a>
           <a className="transition-colors hover:text-ink" href="#how">
             How it works
+          </a>
+          <a className="transition-colors hover:text-ink" href="#cloud">
+            Cloud loop
           </a>
           <a className="transition-colors hover:text-ink" href="#architecture">
             Architecture
@@ -107,20 +115,21 @@ function Hero() {
         <div className="rise-in">
           <span className="inline-flex items-center gap-2 rounded-full border border-line bg-panel/70 px-3 py-1 text-xs text-ink-soft backdrop-blur">
             <span className="pulse-dot h-1.5 w-1.5 rounded-full bg-positive" />
-            No VM · no idle bill · state persists
+            Runs in the cloud · real sandbox · state that outlives it
           </span>
 
           <h1 className="mt-6 text-4xl font-semibold leading-[1.05] tracking-tight sm:text-5xl lg:text-[3.5rem]">
-            An AI coding agent with{" "}
+            A cloud coding agent that{" "}
             <span className="bg-gradient-to-br from-accent to-caution bg-clip-text text-transparent">
-              no machine.
+              never loses its place.
             </span>
           </h1>
 
           <p className="mt-5 max-w-xl text-lg leading-relaxed text-ink-soft">
-            Its files, memory, skills, and schedule are rows in a database. It
-            wakes on your message, does the work, and goes back to costing
-            nothing — with everything still there tomorrow.
+            It runs on Cloudflare, boots a real Linux sandbox when there is
+            something to execute, and keeps every file, memory, and skill in
+            SQLite that outlives the container. Close the tab — the turn keeps
+            going, and tomorrow it still knows you.
           </p>
 
           <div className="mt-8 flex flex-wrap items-center gap-3">
@@ -135,12 +144,12 @@ function Hero() {
               href="#how"
               className="inline-flex h-11 items-center rounded-lg border border-line bg-panel/60 px-5 text-sm font-medium text-ink backdrop-blur transition-colors hover:border-line-strong hover:bg-hover"
             >
-              See the architecture
+              See how it works
             </a>
           </div>
 
           <p className="mt-6 font-mono text-xs text-ink-faint">
-            $0.014 / turn · ~2s sandbox boot · $0 between runs
+            $0.014 / turn · ~2s sandbox boot · state survives the container
           </p>
         </div>
 
@@ -182,8 +191,24 @@ function ProductMock() {
         <div className="space-y-1.5 p-4">
           <ToolRow name="remember" arg="prefers TypeScript, strict mode" ms={9} />
           <ToolRow name="write_file" arg="/src/queue.ts" ms={12} />
-          <ToolRow name="write_file" arg="/src/queue.test.ts" ms={11} />
           <ToolRow name="edit_file" arg="/src/queue.ts · +6 −1" ms={8} />
+
+          {/* The sandbox half, streaming. A reader assumes this is missing the
+              moment the pitch mentions storing state in a database. */}
+          <div className="mt-2 overflow-hidden rounded-lg border border-line bg-canvas">
+            <div className="flex items-center gap-2 border-b border-line px-3 py-1.5 font-mono text-[12px]">
+              <span className="text-accent">$</span>
+              <span className="text-ink-soft">npm test</span>
+              <span className="ml-auto flex items-center gap-1.5 text-[11px] text-positive">
+                <span className="pulse-dot h-1.5 w-1.5 rounded-full bg-positive" />
+                live
+              </span>
+            </div>
+            <pre className="px-3 py-2 font-mono text-[11px] leading-relaxed text-ink-faint">
+              {"PASS  src/queue.test.ts\nTests:  7 passed, 7 total"}
+            </pre>
+          </div>
+
           <ToolRow name="save_skill" arg="build-tested-module" ms={5} />
 
           {/* memory panel */}
@@ -252,10 +277,10 @@ function ToolRow({ name, arg, ms }: { name: string; arg: string; ms: number }) {
 
 function ProofBar() {
   const stats = [
+    { value: "~2s", label: "sandbox boot", note: "real Linux, then disposed" },
     { value: "$0.014", label: "per turn", note: "after ~50× cost work" },
-    { value: "$0", label: "between runs", note: "nothing idles" },
-    { value: "~2s", label: "sandbox boot", note: "then disposed" },
-    { value: "0", label: "tool calls", note: "and it already knew you" },
+    { value: "$0", label: "between runs", note: "state costs nothing idle" },
+    { value: "1", label: "click to a PR", note: "the agent opens it" },
   ];
   return (
     <section className="border-y border-line bg-panel/60">
@@ -275,64 +300,129 @@ function ProofBar() {
 }
 
 /* ================================================================== *
- * Problem → insight
+ * The two runtimes
  * ================================================================== */
 
-function ProblemInsight() {
+const PLANES = [
+  {
+    kicker: "Execution",
+    name: "Linux sandbox",
+    tag: "rented by the second",
+    lead: "Where things actually run.",
+    body: "A real container with a real shell. Install dependencies, run the test suite, read the exit code. It boots in about two seconds, streams its output to the browser line by line while it works, and is torn down when the turn ends.",
+    points: [
+      "npm install, pytest, tsc — whatever the repo needs",
+      "Output streams live; no waiting for the command to finish",
+      "Exit codes are recorded, so a pull request can prove it is green",
+    ],
+    icon: <TerminalIcon />,
+    accent: false,
+  },
+  {
+    kicker: "State",
+    name: "Durable Object SQLite",
+    tag: "outlives every container",
+    lead: "Where things are remembered.",
+    body: "Files, revisions, memory, skills and schedules are rows in SQLite that sits with the agent at the edge. The sandbox can be thrown away precisely because nothing important was ever kept inside it.",
+    points: [
+      "Every write is a new revision — diffs without a git server",
+      "What it learns about you survives into an empty new workspace",
+      "It can wake itself later; the state is already there",
+    ],
+    icon: <DatabaseIcon />,
+    accent: true,
+  },
+];
+
+function TwoRuntimes() {
   return (
     <section id="how" className="mx-auto max-w-6xl px-5 py-24 sm:px-8">
-      <div className="grid gap-12 lg:grid-cols-2 lg:gap-16">
-        <div>
-          <SectionKicker>The problem</SectionKicker>
-          <h2 className="mt-4 text-3xl font-semibold tracking-tight">
-            Agent infrastructure is priced on uptime, not work.
-          </h2>
-          <p className="mt-4 text-lg leading-relaxed text-ink-soft">
-            Every other coding agent rents a Linux box. A VM per user costs money
-            while the agent thinks, while you sleep, and while nobody is using
-            it. Persistence means keeping a disk alive.
-          </p>
+      <div className="max-w-2xl">
+        <SectionKicker>How it works</SectionKicker>
+        <h2 className="mt-4 text-3xl font-semibold tracking-tight">
+          Two runtimes, split along the line that matters.
+        </h2>
+        <p className="mt-4 text-lg leading-relaxed text-ink-soft">
+          Most cloud agents put execution and state in the same box. It works
+          until the box goes away — and the box always goes away. This one keeps
+          the disposable part disposable and the durable part durable.
+        </p>
+      </div>
 
-          <SectionKicker className="mt-10">The insight</SectionKicker>
-          <p className="mt-4 text-lg leading-relaxed text-ink-soft">
-            Put the agent inside a{" "}
-            <span className="text-ink">Cloudflare Durable Object</span> — a tiny
-            stateful box on the edge with SQLite inside. A file becomes a row.
-            Persistence stops being infrastructure and becomes{" "}
-            <span className="text-accent">stored data.</span>
-          </p>
-        </div>
-
-        <div className="rounded-panel border border-line bg-panel p-6 shadow-sm">
-          <div className="mb-5 text-sm font-medium text-ink-soft">
-            Three things come free that competitors have to build
-          </div>
-          <div className="overflow-hidden rounded-lg border border-line">
-            <div className="grid grid-cols-2 bg-raised text-xs font-medium uppercase tracking-wide text-ink-faint">
-              <div className="px-4 py-2.5">Others must build</div>
-              <div className="border-l border-line px-4 py-2.5 text-accent">
-                We get from the model
-              </div>
-            </div>
-            {[
-              ["Memory", "The object never dies"],
-              ["Scheduling", "setAlarm() — one line"],
-              ["File history", "Every write is already a row"],
-            ].map(([a, b], i) => (
+      <div className="mt-12 grid gap-4 lg:grid-cols-2">
+        {PLANES.map((plane) => (
+          <div
+            key={plane.name}
+            className={`relative overflow-hidden rounded-panel border bg-panel p-7 shadow-sm transition-colors ${
+              plane.accent
+                ? "border-accent/40"
+                : "border-line hover:border-line-strong"
+            }`}
+          >
+            {plane.accent ? (
               <div
-                key={a}
-                className={`grid grid-cols-2 text-sm ${
-                  i > 0 ? "border-t border-line" : ""
-                }`}
-              >
-                <div className="px-4 py-3.5 text-ink-soft">{a}</div>
-                <div className="border-l border-line px-4 py-3.5 text-ink">
-                  {b}
+                className="pointer-events-none absolute inset-0"
+                style={{
+                  background:
+                    "radial-gradient(420px 200px at 100% 0%, color-mix(in oklab, var(--color-accent) 14%, transparent), transparent 70%)",
+                }}
+              />
+            ) : null}
+
+            <div className="relative">
+              <div className="flex items-center gap-3">
+                <div
+                  className={`flex h-11 w-11 items-center justify-center rounded-xl ${
+                    plane.accent
+                      ? "bg-accent text-accent-ink"
+                      : "bg-accent-dim text-accent"
+                  }`}
+                >
+                  {plane.icon}
                 </div>
+                <div>
+                  <div className="text-[11px] font-medium uppercase tracking-[0.14em] text-ink-faint">
+                    {plane.kicker}
+                  </div>
+                  <div className="font-mono text-sm font-semibold text-ink">
+                    {plane.name}
+                  </div>
+                </div>
+                <span className="ml-auto rounded-md bg-raised px-2 py-1 text-[11px] text-ink-soft">
+                  {plane.tag}
+                </span>
               </div>
-            ))}
+
+              <p className="mt-5 text-base font-medium text-ink">{plane.lead}</p>
+              <p className="mt-2 text-sm leading-relaxed text-ink-soft">
+                {plane.body}
+              </p>
+
+              <ul className="mt-5 space-y-2 border-t border-line pt-5">
+                {plane.points.map((point) => (
+                  <li
+                    key={point}
+                    className="flex gap-2.5 text-[13px] leading-relaxed text-ink-soft"
+                  >
+                    <CheckIcon />
+                    <span>{point}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
           </div>
-        </div>
+        ))}
+      </div>
+
+      {/* The consequence of the split, stated plainly — this is the part that is
+          hard to retrofit, so it is worth naming rather than implying. */}
+      <div className="mt-4 rounded-panel border border-line bg-panel/60 px-6 py-5">
+        <p className="text-[15px] leading-relaxed text-ink-soft">
+          <span className="text-ink">The consequence:</span> a container dying
+          mid-run costs you a container, not the work. The next turn — minutes or
+          days later, with you watching or not — starts from the same files,
+          the same history, and the same notes it took about your codebase.
+        </p>
       </div>
     </section>
   );
@@ -343,6 +433,16 @@ function ProblemInsight() {
  * ================================================================== */
 
 const FEATURES = [
+  {
+    icon: <TerminalIcon />,
+    title: "Real Linux sandbox",
+    body: "Install packages, run the test suite, read the exit code. Rented for the seconds a command takes, then torn down.",
+  },
+  {
+    icon: <StreamIcon />,
+    title: "Live command output",
+    body: "The sandbox has no streaming API, so commands run detached and their log is tailed. Output reaches you as it happens.",
+  },
   {
     icon: <BrainIcon />,
     title: "Persistent memory",
@@ -356,22 +456,27 @@ const FEATURES = [
   {
     icon: <ClockIcon />,
     title: "Background agents",
-    body: "Wakes itself on a schedule via a Durable Object alarm, works with nobody watching, and sleeps at zero cost.",
+    body: "Wakes itself on a schedule, works with nobody watching, and goes back to sleep at zero cost.",
   },
   {
-    icon: <SparkIcon />,
-    title: "Proactive proposals",
-    body: "Ends every turn with up to three concrete next steps — one click each. It doesn't wait for your next prompt.",
+    icon: <BranchIcon />,
+    title: "Issue to pull request",
+    body: "Pick a GitHub issue and it works the whole way to an open PR — branch, commit, and a body citing every command it ran.",
+  },
+  {
+    icon: <ReviewIcon />,
+    title: "Review-thread loop",
+    body: "After the PR is open it keeps checking review comments, addresses them, and pushes again without being asked.",
   },
   {
     icon: <DiffIcon />,
     title: "Versioned workspace",
-    body: "Every write is a new revision. Review-ready diffs between any two versions, with no git repository behind them.",
+    body: "Every write is a new revision, so a review-ready diff between any two versions is just two rows compared.",
   },
   {
-    icon: <TerminalIcon />,
-    title: "Optional real shell",
-    body: "Rents Linux for the seconds a command takes — install packages, run tests — then tears it down. Off by default.",
+    icon: <RouteIcon />,
+    title: "Per-step model routing",
+    body: "Cheap model for the easy steps, escalating to a stronger one the moment a tool call fails. Priced per model, per step.",
   },
 ];
 
@@ -381,8 +486,13 @@ function Features() {
       <div className="mx-auto max-w-6xl px-5 py-24 sm:px-8">
         <SectionKicker>What it does</SectionKicker>
         <h2 className="mt-4 max-w-2xl text-3xl font-semibold tracking-tight">
-          Six features that fall out of the storage model.
+          Everything a cloud agent needs, and the state to back it.
         </h2>
+        <p className="mt-4 max-w-2xl text-lg leading-relaxed text-ink-soft">
+          The first two come from the sandbox. The rest come from having somewhere
+          durable to put things — which is why they were cheap to build instead of
+          being a roadmap.
+        </p>
 
         <div className="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {FEATURES.map((f) => (
@@ -406,36 +516,83 @@ function Features() {
 }
 
 /* ================================================================== *
- * Honest tradeoff
+ * The cloud loop
  * ================================================================== */
 
-function Tradeoff() {
+const LOOP = [
+  {
+    step: "01",
+    title: "Attach a repository",
+    body: "Pulled as a single tarball and unpacked into SQLite — one request, not one per file. Pick an open issue and it becomes the task.",
+  },
+  {
+    step: "02",
+    title: "It works, you watch",
+    body: "Reads, plans, edits. Every tool call and every line of command output streams to the browser in the order it happened.",
+  },
+  {
+    step: "03",
+    title: "It proves the work",
+    body: "A sandbox boots, the suite runs, exit codes are recorded. Only the last run of each command counts, so a fixed failure reads as fixed.",
+  },
+  {
+    step: "04",
+    title: "You press one button",
+    body: "Branch, commit, pull request — with a body carrying the plan, the changed files, and every command with its exit code. The agent cannot open it alone.",
+  },
+  {
+    step: "05",
+    title: "It keeps reviewing",
+    body: "An alarm wakes it to poll the review threads on its own PR. New comments get addressed and pushed, with the tab closed.",
+  },
+];
+
+function CloudLoop() {
   return (
-    <section className="mx-auto max-w-6xl px-5 py-24 sm:px-8">
-      <div className="relative overflow-hidden rounded-panel border border-line bg-panel p-8 shadow-sm sm:p-12">
-        <div
-          className="pointer-events-none absolute inset-0"
-          style={{
-            background:
-              "radial-gradient(520px 260px at 100% 0%, color-mix(in oklab, var(--color-accent) 16%, transparent), transparent 70%)",
-          }}
-        />
-        <div className="relative max-w-2xl">
-          <SectionKicker>The honest tradeoff</SectionKicker>
-          <h2 className="mt-4 text-3xl font-semibold tracking-tight">
-            No shell by default. The agent can only do what we built a method
-            for.
-          </h2>
-          <p className="mt-5 text-lg leading-relaxed text-ink-soft">
-            That sounds limiting. It means{" "}
-            <span className="text-ink">nothing boots</span>,{" "}
-            <span className="text-ink">nothing idles</span>, and the bill matches
-            the work. Adding a capability means adding a tool, not handing over a
-            shell — a wrong guess fails loudly instead of silently corrupting a
-            file.
-          </p>
-        </div>
+    <section id="cloud" className="mx-auto max-w-6xl px-5 py-24 sm:px-8">
+      <div className="max-w-2xl">
+        <SectionKicker>The cloud loop</SectionKicker>
+        <h2 className="mt-4 text-3xl font-semibold tracking-tight">
+          From an open issue to a pull request that proves itself.
+        </h2>
+        <p className="mt-4 text-lg leading-relaxed text-ink-soft">
+          The whole loop runs server-side. Nothing is installed, nothing runs on
+          your laptop, and no step needs you present except the one that should.
+        </p>
       </div>
+
+      <ol className="mt-12 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+        {LOOP.map((item) => (
+          <li
+            key={item.step}
+            className="group rounded-panel border border-line bg-panel p-6 transition-all duration-200 hover:-translate-y-0.5 hover:border-line-strong hover:shadow-lg hover:shadow-black/10"
+          >
+            <div className="font-mono text-xs font-semibold text-accent">
+              {item.step}
+            </div>
+            <h3 className="mt-3 text-base font-semibold">{item.title}</h3>
+            <p className="mt-2 text-sm leading-relaxed text-ink-soft">
+              {item.body}
+            </p>
+          </li>
+        ))}
+
+        {/* The last cell carries the deliberate limit rather than hiding it —
+            an agent that can merge its own work is a liability, not a feature. */}
+        <li className="rounded-panel border border-dashed border-line bg-panel/40 p-6">
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-raised text-ink-soft">
+            <LockIcon />
+          </div>
+          <h3 className="mt-3 text-base font-semibold">
+            Where it deliberately stops
+          </h3>
+          <p className="mt-2 text-sm leading-relaxed text-ink-soft">
+            It can write, test, commit and push. Opening the pull request is a
+            button you press. Nothing reaches someone else&apos;s repository
+            without a person deciding it should.
+          </p>
+        </li>
+      </ol>
     </section>
   );
 }
@@ -459,19 +616,21 @@ function Architecture() {
         <div className="max-w-2xl">
           <SectionKicker>Architecture</SectionKicker>
           <h2 className="mt-4 text-3xl font-semibold tracking-tight">
-            A stateless Worker in front of five Durable Objects.
+            A stateless Worker, five stateful objects, and a sandbox on demand.
           </h2>
           <p className="mt-4 text-lg leading-relaxed text-ink-soft">
-            Each object owns exactly one thing. The filesystem is a table:{" "}
+            Each object owns exactly one thing, and each is addressed by name, so
+            a session belongs to one user by arithmetic rather than by a check.
+            The filesystem is a table:{" "}
             <span className="font-mono text-sm text-accent">
               files(path, content, version)
             </span>
             . Every write bumps the version and appends a revision — the
-            workspace carries its own history, no git server, no attached disk.
+            workspace carries its own history, with no git server behind it.
           </p>
         </div>
 
-        <div className="mt-12 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+        <div className="mt-12 grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
           {OBJECTS.map((o) => (
             <div
               key={o.name}
@@ -495,6 +654,17 @@ function Architecture() {
               </div>
             </div>
           ))}
+
+          {/* Dashed, because it is the one box that is not durable. */}
+          <div className="rounded-panel border border-dashed border-line bg-panel/40 p-4">
+            <div className="font-mono text-sm font-semibold text-ink">Sandbox</div>
+            <div className="mt-2 inline-block rounded-md bg-raised px-1.5 py-0.5 text-[11px] font-medium text-ink-soft">
+              per command
+            </div>
+            <div className="mt-2.5 text-xs leading-relaxed text-ink-soft">
+              real shell, then gone
+            </div>
+          </div>
         </div>
 
         <div className="mt-8 rounded-panel border border-line bg-canvas p-5 font-mono text-xs leading-relaxed text-ink-soft shadow-inner">
@@ -532,11 +702,12 @@ function FinalCta() {
         />
         <div className="relative">
           <h2 className="mx-auto max-w-2xl text-3xl font-semibold tracking-tight sm:text-4xl">
-            Stop paying for an agent that&apos;s asleep.
+            Point it at a repository and close the tab.
           </h2>
           <p className="mx-auto mt-4 max-w-xl text-lg text-ink-soft">
-            Open a session, teach it something, and watch it remember across an
-            empty new workspace — zero tool calls, and it already knew.
+            Attach a repo, hand it an issue, and watch the sandbox run your tests
+            live. Then open a new session and see it already remember — no tool
+            calls, it just knew.
           </p>
           <div className="mt-8 flex flex-wrap justify-center gap-3">
             <Link
@@ -547,12 +718,12 @@ function FinalCta() {
               <ArrowIcon className="transition-transform group-hover:translate-x-0.5" />
             </Link>
             <a
-              href="https://github.com/qaml-ai/camelAI"
+              href="https://github.com/Sompalkar/Durable-Agent"
               target="_blank"
               rel="noreferrer"
               className="inline-flex h-11 items-center rounded-lg border border-line bg-panel px-6 text-sm font-medium text-ink transition-colors hover:border-line-strong hover:bg-hover"
             >
-              Read the writeup
+              View the source
             </a>
           </div>
         </div>
@@ -570,7 +741,7 @@ function Footer() {
           <span>Durable Agent</span>
         </div>
         <div className="font-mono text-xs">
-          files · memory · skills · schedule — all rows in a database
+          sandbox for the work · SQLite for everything that has to outlive it
         </div>
       </div>
     </footer>
@@ -686,17 +857,62 @@ function ClockIcon() {
     </svg>
   );
 }
-function SparkIcon() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" {...stroke} aria-hidden>
-      <path d="M12 3v4M12 17v4M3 12h4M17 12h4M12 8a4 4 0 0 0 4 4 4 4 0 0 0-4 4 4 4 0 0 0-4-4 4 4 0 0 0 4-4z" />
-    </svg>
-  );
-}
 function DiffIcon() {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" {...stroke} aria-hidden>
       <path d="M12 3v6M9 6h6M6 21h12M9 15h6" />
+    </svg>
+  );
+}
+function DatabaseIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" {...stroke} aria-hidden>
+      <ellipse cx="12" cy="5.5" rx="8" ry="2.8" />
+      <path d="M4 5.5v13c0 1.5 3.6 2.8 8 2.8s8-1.3 8-2.8v-13" />
+      <path d="M4 12c0 1.5 3.6 2.8 8 2.8s8-1.3 8-2.8" />
+    </svg>
+  );
+}
+function StreamIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" {...stroke} aria-hidden>
+      <path d="M4 7h10M4 12h16M4 17h7" />
+      <circle cx="18" cy="7" r="1.6" />
+    </svg>
+  );
+}
+function BranchIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" {...stroke} aria-hidden>
+      <circle cx="7" cy="5" r="2.2" />
+      <circle cx="7" cy="19" r="2.2" />
+      <circle cx="17" cy="9" r="2.2" />
+      <path d="M7 7.2v9.6M17 11.2c0 3-4 2.6-6 4.4" />
+    </svg>
+  );
+}
+function ReviewIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" {...stroke} aria-hidden>
+      <path d="M20 14a2 2 0 0 1-2 2H8l-4 4V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2z" />
+      <path d="M9 10.5l2 2 4-4" />
+    </svg>
+  );
+}
+function RouteIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" {...stroke} aria-hidden>
+      <circle cx="5" cy="6" r="2" />
+      <circle cx="19" cy="18" r="2" />
+      <path d="M7 6h6a4 4 0 0 1 0 8H9a4 4 0 0 0 0 8h0" />
+    </svg>
+  );
+}
+function LockIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" {...stroke} aria-hidden>
+      <rect x="4" y="10" width="16" height="11" rx="2" />
+      <path d="M8 10V7a4 4 0 0 1 8 0v3" />
     </svg>
   );
 }
