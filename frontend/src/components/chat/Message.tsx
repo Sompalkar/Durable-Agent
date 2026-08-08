@@ -8,7 +8,9 @@
  * emits that need structure: fenced code blocks and paragraph breaks.
  */
 
+import { useState } from "react";
 import { Markdown } from "@/lib/markdown";
+import { CopyIcon, CheckIcon } from "@/components/ui/icons";
 
 export function UserMessage({ text }: { text: string }) {
   return (
@@ -44,6 +46,54 @@ export function AssistantMessage({
   );
 }
 
+/** Code block with copy button. */
+function CodeBlock({
+  content,
+  language,
+}: {
+  content: string;
+  language: string;
+}) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(content);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch (err) {
+      console.error("Copy failed:", err);
+    }
+  };
+
+  return (
+    <figure className="relative overflow-hidden rounded-lg border border-line bg-canvas">
+      {language ? (
+        <figcaption className="border-b border-line px-3 py-1.5 font-mono text-[11px] uppercase tracking-wider text-ink-faint">
+          {language}
+        </figcaption>
+      ) : null}
+      <button
+        onClick={handleCopy}
+        className="absolute right-2 top-2 flex h-8 w-8 items-center justify-center rounded border border-line bg-canvas text-ink-soft transition-colors hover:bg-hover hover:text-ink"
+        title={copied ? "Copied!" : "Copy code"}
+        aria-label={copied ? "Copied!" : "Copy code"}
+      >
+        {copied ? (
+          <CheckIcon className="h-4 w-4 text-positive" />
+        ) : (
+          <CopyIcon className="h-4 w-4" />
+        )}
+      </button>
+      <pre className="overflow-x-auto px-3 py-2.5 pr-12">
+        <code className="font-mono text-[13px] leading-relaxed text-ink-soft">
+          {content}
+        </code>
+      </pre>
+    </figure>
+  );
+}
+
 /** Splits text into fenced code blocks and prose. */
 export function MessageBody({
   text,
@@ -61,21 +111,11 @@ export function MessageBody({
 
         if (segment.type === "code") {
           return (
-            <figure
+            <CodeBlock
               key={index}
-              className="overflow-hidden rounded-lg border border-line bg-canvas"
-            >
-              {segment.language ? (
-                <figcaption className="border-b border-line px-3 py-1.5 font-mono text-[11px] uppercase tracking-wider text-ink-faint">
-                  {segment.language}
-                </figcaption>
-              ) : null}
-              <pre className="overflow-x-auto px-3 py-2.5">
-                <code className="font-mono text-[13px] leading-relaxed text-ink-soft">
-                  {segment.content}
-                </code>
-              </pre>
-            </figure>
+              content={segment.content}
+              language={segment.language}
+            />
           );
         }
 
