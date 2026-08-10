@@ -403,6 +403,51 @@ const SANDBOX_TOOLS: Anthropic.Tool[] = [
 ];
 
 /** Offered only when a repository is attached — otherwise there is no repo to file against. */
+/**
+ * Read-only git, run against the checkout in the sandbox.
+ *
+ * The container holds a real clone with the agent's edits applied on top, so
+ * `git diff` there is literally what the pull request will contain — computed
+ * by git rather than inferred by comparing rows.
+ *
+ * Nothing here writes. Committing, checking out or resetting inside a container
+ * that is thrown away each turn would put the two sources of truth into
+ * disagreement, and the Durable Object has to win that argument.
+ */
+const GIT_TOOLS: Anthropic.Tool[] = [
+	{
+		name: 'git',
+		description:
+			'Run a read-only git command against the repository checkout in the sandbox. ' +
+			'Use "status" to see which files you have changed, "diff" for the exact lines, ' +
+			'and "diff_stat" for a per-file summary before opening a pull request. ' +
+			'"show" prints a file as it exists in the base commit, which is how you check what ' +
+			'you started from without undoing your own work, and "base" reports the commit you ' +
+			'are working from. ' +
+			'This reflects the real repository, so it is the most reliable answer to ' +
+			'"what have I actually changed". It cannot commit, push, or check out — ' +
+			'the workspace is the source of truth and the container is discarded each turn. ' +
+			'Note the clone is shallow, so history is one commit deep.',
+		input_schema: {
+			type: 'object',
+			properties: {
+				command: {
+					type: 'string',
+					enum: ['status', 'diff', 'diff_stat', 'show', 'base'],
+					description: 'Which read-only git command to run.',
+				},
+				path: {
+					type: 'string',
+					description:
+						'Optional file to scope to, e.g. "frontend/src/app.tsx". Required for "show". ' +
+						'Relative to the repository root, with no leading slash.',
+				},
+			},
+			required: ['command'],
+		},
+	},
+];
+
 const GITHUB_TOOLS: Anthropic.Tool[] = [
 	{
 		name: 'github_create_issue',
@@ -448,6 +493,8 @@ export function buildToolDefinitions(options: {
 		...SCHEDULE_TOOLS,
 		...PROPOSAL_TOOLS,
 		...(options.sandbox ? SANDBOX_TOOLS : []),
+		// Needs both: a checkout to inspect, and a container to inspect it in.
+		...(options.sandbox && options.repo ? GIT_TOOLS : []),
 		...(options.repo ? GITHUB_TOOLS : []),
 	];
 }

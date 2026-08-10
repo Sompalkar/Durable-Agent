@@ -423,6 +423,69 @@ const HANDLERS: Record<string, ToolHandler> = {
 		);
 	},
 
+	// ------------------------------------------------------------------- git
+
+	async git(input, context) {
+		const { sandbox, workspace, repo } = context;
+		if (!sandbox) throw new Error('No sandbox is configured, so git is unavailable.');
+		if (!repo) throw new Error('No repository is attached, so there is nothing to inspect.');
+
+		const requested = requireString(input.command, 'command');
+		const builder = GIT_COMMANDS[requested];
+		if (!builder) {
+			throw new Error(
+				`Unknown git command "${requested}". Available: ${Object.keys(GIT_COMMANDS).join(', ')}.`,
+			);
+		}
+
+		// Paths are shell-quoted rather than validated, so a name with a space or
+		// a quote in it is passed through intact instead of splitting the command.
+		const path = typeof input.path === 'string' ? input.path.replace(/^\/+/, '').trim() : '';
+		if (builder.requiresPath && !path) {
+			throw new Error(`The "${requested}" command needs a "path".`);
+		}
+
+		// The agent's edits have to be on disk for a diff to mean anything, so the
+		// same upload the shell path performs happens here too.
+		const files = await workspace.list();
+		const changed = files
+			.filter((file) => context.changedPaths.has(file.path))
+			.filter((file) => context.syncedVersions.get(file.path) !== file.version);
+		const contents = await Promise.all(changed.map((file) => workspace.read(file.path)));
+		for (const file of changed) context.syncedVersions.set(file.path, file.version);
+
+		const result = await sandbox.run({
+			command: builder.build(path),
+			files: contents.map((file) => ({ path: file.path, content: file.content })),
+			timeoutSeconds: 60,
+			repo: repo.checkout,
+		});
+
+		if (result.exitCode !== 0) {
+			return {
+				ok: false,
+				content: `git ${requested} failed (exit ${result.exitCode}):\n${tail(result.stderr || result.stdout)}`,
+				summary: `git ${requested} failed`,
+			};
+		}
+
+		const output = result.stdout.trim();
+		if (!output) {
+			// An empty diff is a real answer, and a confusing one to receive blank.
+			return ok(
+				`git ${requested} produced no output — nothing has changed relative to the base commit.`,
+				`git ${requested}: no changes`,
+			);
+		}
+
+		return {
+			ok: true,
+			content: `$ git ${requested}${path ? ` ${path}` : ''}\n\n${tail(output)}`,
+			summary: `git ${requested}`,
+			output: keepTail(output, MAX_PERSISTED_OUTPUT_CHARS),
+		};
+	},
+
 	// --------------------------------------------------------------- sandbox
 
 	async run_command(input, context, toolUseId) {
@@ -603,6 +666,34 @@ function truncate(content: string): string {
 }
 
 /** Keep the last N characters — where compiler and test failures live. */
+/**
+ * The git commands the agent may run, and how each is built.
+ *
+ * An allow-list rather than a pass-through: the agent already has a shell, so
+ * the value here is not capability, it is that these are the right commands with
+ * the right flags, run in the right directory, every time. `--no-pager` matters
+ * because git otherwise blocks waiting for a pager that does not exist.
+ */
+const GIT_COMMANDS: Record<string, { build: (path: string) => string; requiresPath?: boolean }> = {
+	// Porcelain format is stable across git versions; the human-readable one is
+	// explicitly documented as not being.
+	status: { build: () => 'git --no-pager status --porcelain=v1 --untracked-files=all' },
+	diff: {
+		build: (path) =>
+			`git --no-pager diff --no-color${path ? ` -- ${quoteForShell(path)}` : ''}`,
+	},
+	diff_stat: { build: () => 'git --no-pager diff --no-color --stat' },
+	show: { build: (path) => `git --no-pager show HEAD:${quoteForShell(path)}`, requiresPath: true },
+	// The checkout is detached at a pinned commit, so `branch --show-current`
+	// would print nothing. Reporting the commit is the honest equivalent.
+	base: { build: () => "git --no-pager log -1 --format='%h %an %ad %s' --date=short" },
+};
+
+/** Single-quote for `sh`, escaping any embedded single quotes. */
+function quoteForShell(value: string): string {
+	return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
 /**
  * Rewrite a leading `cd /foo` to `cd foo` when `/foo` is a top-level workspace
  * directory.
