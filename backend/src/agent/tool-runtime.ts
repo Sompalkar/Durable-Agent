@@ -26,6 +26,13 @@ export interface ToolContext {
 	 * the session runs on the sandbox runtime. The tools do not know which.
 	 */
 	workspace: AgentWorkspace;
+	/**
+	 * True when `workspace` is backed by the container itself.
+	 *
+	 * Shell commands then skip copying files in and out: they are already there,
+	 * and doing it anyway would spend subrequests writing a file on top of itself.
+	 */
+	filesLiveInSandbox: boolean;
 	brain: DurableObjectStub<BrainDO>;
 	/**
 	 * Memory scoped to the attached repository, when there is one.
@@ -451,7 +458,9 @@ const HANDLERS: Record<string, ToolHandler> = {
 
 		// The agent's edits have to be on disk for a diff to mean anything, so the
 		// same upload the shell path performs happens here too.
-		const files = await workspace.list();
+		// Nothing to push when the workspace *is* the container: the edits git
+		// needs to see are already on its disk.
+		const files = context.filesLiveInSandbox ? [] : await workspace.list();
 		const changed = files
 			.filter((file) => context.changedPaths.has(file.path))
 			.filter((file) => context.syncedVersions.get(file.path) !== file.version);
@@ -509,7 +518,10 @@ const HANDLERS: Record<string, ToolHandler> = {
 		// Either way the Durable Object stays the source of truth: the container
 		// is destroyed at the end of the turn, and the record of what changed is
 		// what survives.
-		const files = await workspace.list();
+		// Same reasoning: on the sandbox runtime the files are already in place, so
+		// the copy-in step is skipped entirely rather than rewriting each file
+		// on top of itself and spending a subrequest per file to do it.
+		const files = context.filesLiveInSandbox ? [] : await workspace.list();
 
 		// Workspace paths are absolute ("/frontend/..."), but the shell starts in
 		// the repository root, where the matching path is relative. A leading
@@ -556,15 +568,23 @@ const HANDLERS: Record<string, ToolHandler> = {
 			setup: repo && input.install === true ? repo.installCommand : undefined,
 		});
 
-		for (const file of result.changedFiles.filter((file) => isAgentAuthored(file.path))) {
-			const record = await workspace.write(
-				file.path,
-				file.content,
+		// One call, not one per file. A build that touches forty files would
+		// otherwise spend forty of the invocation's fifty subrequests writing them
+		// back, and fail the turn for reasons that have nothing to do with the task.
+		const authored = result.changedFiles.filter((file) => isAgentAuthored(file.path));
+		if (authored.length > 0) {
+			await workspace.writeMany(
+				authored.map((file) => ({ path: file.path, content: file.content })),
 				`written by \`${command.slice(0, 40)}\``,
 			);
-			// The container already has this content, so do not send it back next time.
-			context.syncedVersions.set(record.path, record.version);
-			context.changedPaths.add(record.path);
+			for (const file of authored) {
+				const path = file.path.startsWith('/') ? file.path : `/${file.path}`;
+				// The container already has this content, so do not send it back next
+				// time. The version is unknown here; clearing it forces one re-read
+				// rather than risking a stale copy being pushed over a newer one.
+				context.syncedVersions.delete(path);
+				context.changedPaths.add(path);
+			}
 		}
 
 		const sections = [`$ ${command}`, `exit ${result.exitCode} · ${result.durationMs}ms`];

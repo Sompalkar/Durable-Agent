@@ -28,6 +28,7 @@ import {
 } from '../agent/models';
 import { createSandbox } from '../agent/sandbox';
 import { DEFAULT_RUNTIME, isRuntime, keepsSandboxWarm, type Runtime } from '../agent/runtime';
+import { SandboxWorkspace } from '../agent/workspace/sandbox-workspace';
 import type { CommandRecord, RepoContext, ToolContext } from '../agent/tool-runtime';
 import type {
 	AgentEvent,
@@ -572,6 +573,24 @@ export class AgentSessionDO extends DurableObject<Env> {
 			repoBrain ? repoBrain.recall(REPO_RECALL_LIMIT) : Promise.resolve([]),
 		]);
 
+		// One provider instance per turn, shared by the tools and — on the sandbox
+		// runtime — by the workspace. Two instances would mean two containers.
+		const sandbox = createSandbox(this.env, {
+			sessionId,
+			sandboxId: this.getMeta('sandboxId') ?? undefined,
+			onSandboxCreated: (id) => this.setMeta('sandboxId', id),
+		});
+
+		// On the sandbox runtime the container holds the files and the object keeps
+		// their history. Chosen here rather than inside the tools, which is the
+		// whole point of the workspace interface.
+		const durableWorkspace = this.workspaceStub();
+		const filesLiveInSandbox = keepsSandboxWarm(this.runtime()) && sandbox !== null;
+		const workspace =
+			filesLiveInSandbox && sandbox
+				? new SandboxWorkspace(sandbox, durableWorkspace, repo?.checkout ?? null)
+				: durableWorkspace;
+
 		const context: ToolContext = {
 			sessionId,
 			userId: this.userId(),
@@ -579,17 +598,14 @@ export class AgentSessionDO extends DurableObject<Env> {
 			// the previous turn left behind rather than starting blank.
 			plan: this.getPlan(),
 			emit,
-			workspace: this.workspaceStub(),
+			workspace,
+			filesLiveInSandbox,
 			brain,
 			repoBrain,
 			scheduler: this.schedulerStub(),
 			// Reuse this session's sandbox if one was already booted, so only the
 			// first command in a session pays for startup.
-			sandbox: createSandbox(this.env, {
-				sessionId,
-				sandboxId: this.getMeta('sandboxId') ?? undefined,
-				onSandboxCreated: (id) => this.setMeta('sandboxId', id),
-			}),
+			sandbox,
 			proposals: [],
 			// Reset per turn: a fresh turn may reuse a warm sandbox, but the safe
 			// assumption after a restart is that nothing is mirrored yet.
