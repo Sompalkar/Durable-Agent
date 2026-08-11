@@ -49,6 +49,16 @@ const WORKDIR = '/home/daytona/workspace';
  */
 const MARKER = '/tmp/.agent-run-marker';
 
+/**
+ * Records which commit the workspace holds, inside the container itself.
+ *
+ * A provider instance lives for one turn, so an in-memory flag cannot tell a
+ * reused container that it is already checked out — and re-cloning wipes
+ * `node_modules` along with everything else. Keeping the answer on the
+ * container's own disk is the only place both turns can see it.
+ */
+const CHECKOUT_MARKER = '/tmp/.agent-checkout-sha';
+
 /** Where a streamed command's output and exit code are collected. */
 const LOG_FILE = '/tmp/.agent-run.log';
 const EXIT_FILE = '/tmp/.agent-run.exit';
@@ -239,6 +249,15 @@ export class DaytonaSandbox implements SandboxProvider {
 	private async ensureCheckout(sandboxId: string, repo: RepoCheckout): Promise<void> {
 		if (this.checkedOut === repo.commitSha) return;
 
+		// A container carried over from a previous turn may already hold exactly
+		// this commit, with dependencies installed on top. Asking it is one cheap
+		// call; getting it wrong costs a re-clone and a re-install.
+		const existing = await this.exec(sandboxId, `cat ${CHECKOUT_MARKER} 2>/dev/null || true`, 30);
+		if (existing.stdout.trim() === repo.commitSha) {
+			this.checkedOut = repo.commitSha;
+			return;
+		}
+
 		const script = [
 			`rm -rf ${WORKDIR}`,
 			`mkdir -p ${WORKDIR}`,
@@ -249,6 +268,9 @@ export class DaytonaSandbox implements SandboxProvider {
 			`git checkout -q FETCH_HEAD`,
 			// Token out of the remote as soon as it is no longer needed.
 			`git remote set-url origin ${shellQuote(stripCredentials(repo.cloneUrl))}`,
+			// Written last, so a checkout interrupted halfway is not mistaken for a
+			// finished one by the next turn.
+			`printf '%s' ${shellQuote(repo.commitSha)} > ${CHECKOUT_MARKER}`,
 		].join(' && ');
 
 		const result = await this.exec(sandboxId, script, 300);
