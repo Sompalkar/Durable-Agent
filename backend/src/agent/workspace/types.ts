@@ -19,6 +19,17 @@ export interface AgentWorkspace {
 	glob(pattern: string): Promise<FileRecord[]>;
 	grep(pattern: string, options?: { pathPattern?: string; limit?: number }): Promise<GrepMatch[]>;
 	write(path: string, content: string, summary?: string): Promise<FileRecord>;
+	/**
+	 * Write many files as one operation.
+	 *
+	 * Not a convenience: a Worker invocation has fifty subrequests, and a command
+	 * that touched forty files would spend forty of them writing back one at a
+	 * time. Implementations must do this in a bounded number of round trips.
+	 */
+	writeMany(
+		files: Array<{ path: string; content: string }>,
+		summary?: string,
+	): Promise<{ written: number; skipped: string[] }>;
 	edit(path: string, oldText: string, newText: string): Promise<FileRecord>;
 	remove(path: string): Promise<boolean>;
 	move(from: string, to: string): Promise<FileRecord>;
