@@ -11,7 +11,7 @@
 
 import type { BrainDO, MemoryCategory } from '../durable-objects/brain-do';
 import type { Cadence, SchedulerDO } from '../durable-objects/scheduler-do';
-import type { WorkspaceDO } from '../durable-objects/workspace-do';
+import type { AgentWorkspace } from './workspace/types';
 import type { AgentEvent, PlanStatus, PlanStep, Proposal, ToolOutcome } from '../types';
 import { GitHubClient } from '../github/client';
 import type { RepoCheckout, SandboxProvider } from './sandbox';
@@ -21,7 +21,11 @@ export interface ToolContext {
 	sessionId: string;
 	/** The account this turn runs on behalf of. Scopes every object it touches. */
 	userId: string;
-	workspace: DurableObjectStub<WorkspaceDO>;
+	/**
+	 * Where this session's files live. A Durable Object today; a container when
+	 * the session runs on the sandbox runtime. The tools do not know which.
+	 */
+	workspace: AgentWorkspace;
 	brain: DurableObjectStub<BrainDO>;
 	/**
 	 * Memory scoped to the attached repository, when there is one.
