@@ -146,15 +146,42 @@ function CommandLog({ text, live }: { text: string; live: boolean }) {
     if (live) endRef.current?.scrollIntoView({ block: "end" });
   }, [text, live]);
 
+  // A unified diff is the one kind of command output where plain text throws
+  // away the meaning — the +/- prefix is the whole point of reading it.
+  const lines = looksLikeDiff(text) ? text.split("\n") : null;
+
   return (
     <div className="max-h-56 overflow-auto border-t border-line bg-canvas">
       <pre className="px-3 py-2.5 font-mono text-[12px] leading-relaxed text-ink-soft">
-        {text}
+        {lines
+          ? lines.map((line, index) => (
+              <span key={index} className={diffLineClass(line)}>
+                {line}
+                {index < lines.length - 1 ? "\n" : null}
+              </span>
+            ))
+          : text}
         {live ? <span className="cursor-blink text-accent">▍</span> : null}
       </pre>
       <div ref={endRef} />
     </div>
   );
+}
+
+/** True for output that is a unified diff, so it can be coloured as one. */
+function looksLikeDiff(text: string): boolean {
+  return /^diff --git |^@@ .* @@/m.test(text);
+}
+
+function diffLineClass(line: string): string {
+  // Order matters: "+++" and "---" are file headers, not added or removed
+  // lines, so they have to be matched before the single-character prefixes.
+  if (line.startsWith("+++") || line.startsWith("---")) return "text-ink-faint";
+  if (line.startsWith("@@")) return "text-info";
+  if (line.startsWith("diff --git") || line.startsWith("index ")) return "text-ink-faint";
+  if (line.startsWith("+")) return "text-positive";
+  if (line.startsWith("-")) return "text-negative";
+  return "";
 }
 
 function StatusMark({ status }: { status: ToolActivity["status"] }) {
