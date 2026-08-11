@@ -75,16 +75,27 @@ sessionRoutes.get('/:id', async (c) => {
 sessionRoutes.patch('/:id', async (c) => {
 	const user = c.get('user');
 	const id = c.req.param('id');
-	const body = await readJson<{ title?: string; model?: string; effort?: string }>(c.req.raw);
+	const body = await readJson<{
+		title?: string;
+		model?: string;
+		effort?: string;
+		runtime?: string;
+	}>(c.req.raw);
 	const stub = sessionStub(c.env, user.id, id);
 
-	if (body.model !== undefined || body.effort !== undefined) {
-		const summary = await stub.configure({ model: body.model, effort: body.effort });
+	if (body.model !== undefined || body.effort !== undefined || body.runtime !== undefined) {
+		const summary = await stub.configure({
+			model: body.model,
+			effort: body.effort,
+			runtime: body.runtime,
+		});
 		return c.json({ session: summary });
 	}
 
 	if (typeof body.title !== 'string' || !body.title.trim()) {
-		throw ApiError.badRequest('"title" must be a non-empty string, or send "model"/"effort".');
+		throw ApiError.badRequest(
+			'"title" must be a non-empty string, or send "model", "effort" or "runtime".',
+		);
 	}
 
 	const summary = await stub.rename(body.title.trim());

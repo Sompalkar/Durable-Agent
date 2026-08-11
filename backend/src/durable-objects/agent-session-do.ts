@@ -27,6 +27,7 @@ import {
 	isValidModel,
 } from '../agent/models';
 import { createSandbox } from '../agent/sandbox';
+import { DEFAULT_RUNTIME, isRuntime, keepsSandboxWarm, type Runtime } from '../agent/runtime';
 import type { CommandRecord, RepoContext, ToolContext } from '../agent/tool-runtime';
 import type {
 	AgentEvent,
@@ -318,7 +319,17 @@ export class AgentSessionDO extends DurableObject<Env> {
 			turnLimit: this.turnLimit(),
 			model: this.model(),
 			effort: this.effort(),
+			runtime: this.runtime(),
 		};
+	}
+
+	/**
+	 * Which runtime this session uses. Defaults to the cheap one — a user who has
+	 * not asked for a warm container should never be billed for one.
+	 */
+	private runtime(): Runtime {
+		const stored = this.getMeta('runtime');
+		return stored && isRuntime(stored) ? stored : DEFAULT_RUNTIME;
 	}
 
 	/** The model this session runs on. Falls back to the deployment default. */
@@ -336,8 +347,12 @@ export class AgentSessionDO extends DurableObject<Env> {
 		return isValidEffort(configured) ? configured : DEFAULT_EFFORT;
 	}
 
-	/** Switch model or effort mid-session — takes effect on the next turn. */
-	async configure(options: { model?: string; effort?: string }): Promise<SessionSummary> {
+	/** Switch model, effort or runtime mid-session — takes effect on the next turn. */
+	async configure(options: {
+		model?: string;
+		effort?: string;
+		runtime?: string;
+	}): Promise<SessionSummary> {
 		if (options.model !== undefined) {
 			if (!isSelectableModel(options.model)) throw new Error(`Unknown model: ${options.model}`);
 			this.setMeta('model', options.model);
@@ -346,7 +361,34 @@ export class AgentSessionDO extends DurableObject<Env> {
 			if (!isValidEffort(options.effort)) throw new Error(`Unknown effort: ${options.effort}`);
 			this.setMeta('effort', options.effort);
 		}
+		if (options.runtime !== undefined) {
+			if (!isRuntime(options.runtime)) throw new Error(`Unknown runtime: ${options.runtime}`);
+			// Dropping to the cheap runtime has to take effect now, not next turn.
+			// Otherwise a user turning it off keeps paying for the warm container
+			// until they happen to send another message.
+			if (!keepsSandboxWarm(options.runtime)) await this.disposeSandbox();
+			this.setMeta('runtime', options.runtime);
+		}
 		return this.summary();
+	}
+
+	/**
+	 * Destroy this session's container, if it has one.
+	 *
+	 * Safe to call when there is none. Failure is ignored on purpose: the
+	 * provider's own idle timeout will reap anything left behind, and a dead
+	 * container must never be the reason a turn reports an error.
+	 */
+	private async disposeSandbox(): Promise<void> {
+		const sandboxId = this.getMeta('sandboxId');
+		if (!sandboxId) return;
+		this.ctx.storage.sql.exec("DELETE FROM meta WHERE key = 'sandboxId'");
+		const sandbox = createSandbox(this.env, {
+			sessionId: this.getMeta('sessionId') ?? 'default',
+			sandboxId,
+			onSandboxCreated: () => {},
+		});
+		await sandbox?.dispose().catch(() => {});
 	}
 
 	async rename(title: string): Promise<SessionSummary> {
@@ -578,10 +620,14 @@ export class AgentSessionDO extends DurableObject<Env> {
 			this.appendTranscript('assistant', result.text, result.tools, trigger, result.segments);
 		}
 
-		// Stop the container as soon as the turn ends. Booting costs ~2s; leaving
-		// one idling costs money for as long as it lives, and a chat session can
-		// sit open for hours between messages.
-		if (context.sandbox && result.tools.some((tool) => tool.name === 'run_command')) {
+		// On the durable runtime the container goes as soon as the turn ends.
+		// Booting costs ~2s; leaving one idling costs money for as long as it
+		// lives, and a chat session can sit open for hours between messages.
+		//
+		// On the sandbox runtime it is kept deliberately — a dev server that dies
+		// between turns is not a dev server. The provider's idle timeout is the
+		// backstop for a session nobody comes back to.
+		if (context.sandbox && !keepsSandboxWarm(this.runtime())) {
 			await context.sandbox.dispose().catch(() => {});
 			this.ctx.storage.sql.exec("DELETE FROM meta WHERE key = 'sandboxId'");
 		}
