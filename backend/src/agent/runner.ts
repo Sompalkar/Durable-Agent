@@ -246,7 +246,21 @@ export async function runAgentTurn(options: RunOptions): Promise<RunResult> {
 			toolResults.push({
 				type: 'tool_result',
 				tool_use_id: toolUse.id,
-				content: outcome.content,
+				// An image has to travel as its own block; a data URL inside text is
+				// just a very long string the model cannot look at.
+				content: outcome.image
+					? [
+							{ type: 'text' as const, text: outcome.content },
+							{
+								type: 'image' as const,
+								source: {
+									type: 'base64' as const,
+									media_type: outcome.image.mediaType as 'image/png',
+									data: outcome.image.base64,
+								},
+							},
+						]
+					: outcome.content,
 				is_error: !outcome.ok,
 			});
 		}

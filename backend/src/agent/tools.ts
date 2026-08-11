@@ -414,6 +414,41 @@ const SANDBOX_TOOLS: Anthropic.Tool[] = [
  * that is thrown away each turn would put the two sources of truth into
  * disagreement, and the Durable Object has to win that argument.
  */
+const BROWSER_TOOLS: Anthropic.Tool[] = [
+	{
+		name: 'screenshot',
+		description:
+			'Open a URL in a real browser inside the sandbox and look at it. Returns the image ' +
+			'plus any errors the page logged to its console. ' +
+			'Use this after changing anything visual — you cannot tell whether a layout is right ' +
+			'by reading the code, and a passing test does not mean the page renders. ' +
+			'The URL must be served from inside the sandbox, so start the dev server with ' +
+			'run_command first and point at localhost. The container cannot reach the outside ' +
+			'internet or the user\'s machine. ' +
+			'The first call downloads a browser and takes a minute; later calls are quick.',
+		input_schema: {
+			type: 'object',
+			properties: {
+				url: {
+					type: 'string',
+					description: 'Page to open, e.g. "http://localhost:3000/login".',
+				},
+				full_page: {
+					type: 'boolean',
+					description:
+						'Capture the whole scrollable page rather than just the viewport. Off by default.',
+				},
+				wait_ms: {
+					type: 'number',
+					description:
+						'Milliseconds to wait after load, for a page that animates in or fetches on mount. Defaults to 1000.',
+				},
+			},
+			required: ['url'],
+		},
+	},
+];
+
 const GIT_TOOLS: Anthropic.Tool[] = [
 	{
 		name: 'git',
@@ -493,6 +528,8 @@ export function buildToolDefinitions(options: {
 		...SCHEDULE_TOOLS,
 		...PROPOSAL_TOOLS,
 		...(options.sandbox ? SANDBOX_TOOLS : []),
+		// Needs a container: there is no way to render a page without one.
+		...(options.sandbox ? BROWSER_TOOLS : []),
 		// Needs both: a checkout to inspect, and a container to inspect it in.
 		...(options.sandbox && options.repo ? GIT_TOOLS : []),
 		...(options.repo ? GITHUB_TOOLS : []),

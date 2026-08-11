@@ -14,6 +14,7 @@ import type { Cadence, SchedulerDO } from '../durable-objects/scheduler-do';
 import type { AgentWorkspace } from './workspace/types';
 import type { AgentEvent, PlanStatus, PlanStep, Proposal, ToolOutcome } from '../types';
 import { GitHubClient } from '../github/client';
+import { captureScreenshot } from './screenshot';
 import type { RepoCheckout, SandboxProvider } from './sandbox';
 
 /** Everything a tool might need, assembled once per turn. */
@@ -434,6 +435,52 @@ const HANDLERS: Record<string, ToolHandler> = {
 		);
 	},
 
+	// --------------------------------------------------------------- browser
+
+	async screenshot(input, context) {
+		const { sandbox, workspace, repo } = context;
+		if (!sandbox) throw new Error('No sandbox is configured, so screenshots are unavailable.');
+
+		const url = requireString(input.url, 'url');
+		if (!/^https?:\/\//i.test(url)) {
+			throw new Error('The url must start with http:// or https://.');
+		}
+
+		const shot = await captureScreenshot(
+			sandbox,
+			{
+				url,
+				fullPage: input.full_page === true,
+				// Bounded so a mistaken value cannot hold the turn open for minutes.
+				settleMs: Math.min(10_000, Math.max(0, Number(input.wait_ms) || 1_000)),
+			},
+			repo?.checkout ?? null,
+		);
+
+		// Saved as a workspace file so it survives the turn and the container: the
+		// image the agent looked at is the image the user can still open tomorrow.
+		const path = `/screenshots/${screenshotName(url)}.png.b64`;
+		await workspace.write(path, shot.base64, `screenshot of ${url}`).catch(() => {
+			// Storage is a convenience. Failing to save must not lose the capture
+			// the agent is about to reason about.
+		});
+
+		const errors = shot.consoleErrors.slice(0, 5);
+		const notes = [
+			`Screenshot of ${url} (${Math.round(shot.bytes / 1024)}KB), saved to ${path}.`,
+			errors.length > 0
+				? `The page logged ${shot.consoleErrors.length} console error(s):\n${errors.join('\n')}`
+				: 'The page logged no console errors.',
+		];
+
+		return {
+			ok: true,
+			content: notes.join('\n\n'),
+			summary: `screenshot of ${url}${errors.length > 0 ? `, ${errors.length} console error(s)` : ''}`,
+			image: { mediaType: 'image/png', base64: shot.base64 },
+		};
+	},
+
 	// ------------------------------------------------------------------- git
 
 	async git(input, context) {
@@ -712,6 +759,22 @@ const GIT_COMMANDS: Record<string, { build: (path: string) => string; requiresPa
 	// would print nothing. Reporting the commit is the honest equivalent.
 	base: { build: () => "git --no-pager log -1 --format='%h %an %ad %s' --date=short" },
 };
+
+/**
+ * A stable, readable filename for a captured page.
+ *
+ * Derived from the URL rather than a timestamp so repeated shots of the same
+ * page overwrite into one file with a version history, instead of littering the
+ * workspace with near-identical images.
+ */
+function screenshotName(url: string): string {
+	const slug = url
+		.replace(/^https?:\/\//i, '')
+		.replace(/[^a-zA-Z0-9]+/g, '-')
+		.replace(/^-+|-+$/g, '')
+		.slice(0, 60);
+	return slug || 'page';
+}
 
 /** Single-quote for `sh`, escaping any embedded single quotes. */
 function quoteForShell(value: string): string {

@@ -116,6 +116,13 @@ export interface ToolOutcome {
 	 * so it is capped where the streamed copy is not.
 	 */
 	output?: string;
+	/**
+	 * An image to hand back to the model, not just describe to it.
+	 *
+	 * Sent as an image block in the tool result, which is the difference between
+	 * the agent being told a page looks wrong and being able to see that it does.
+	 */
+	image?: { mediaType: string; base64: string };
 }
 
 /**
