@@ -36,11 +36,33 @@ const AUTO: ModelOption = {
   tier: "cheapest",
 };
 
+/**
+ * The two runtimes, described by what they cost rather than by how they work.
+ *
+ * Someone choosing here is deciding whether to pay for an idle container, and
+ * that is the only part of the distinction they can feel.
+ */
+const RUNTIMES = [
+  {
+    id: "durable",
+    label: "On demand",
+    blurb:
+      "A container is rented per command and destroyed after. Nothing is billed between messages.",
+  },
+  {
+    id: "sandbox",
+    label: "Always on",
+    blurb:
+      "Keeps one container alive between turns, so a dev server stays up and dependencies survive. Costs while idle.",
+  },
+] as const;
+
 export function ModelPicker({
   models,
   efforts,
   model,
   effort,
+  runtime,
   disabled,
   onChange,
 }: {
@@ -48,8 +70,9 @@ export function ModelPicker({
   efforts: string[];
   model: string;
   effort: string;
+  runtime: string;
   disabled: boolean;
-  onChange: (next: { model?: string; effort?: string }) => void;
+  onChange: (next: { model?: string; effort?: string; runtime?: string }) => void;
 }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -177,6 +200,34 @@ export function ModelPicker({
             </div>
             <p className="pt-1.5 text-[10px] leading-snug text-ink-faint">
               Lower effort means less thinking per step. Start low while building.
+            </p>
+          </div>
+
+          {/* Runtime. Cost is the whole trade-off here, so the copy leads with
+              it rather than with the capability it buys. */}
+          <div className="border-t border-line px-3 py-2.5">
+            <p className="mb-1.5 text-[10px] font-medium uppercase tracking-wide text-ink-faint">
+              Runtime
+            </p>
+            <div className="flex gap-1">
+              {RUNTIMES.map((option) => (
+                <button
+                  key={option.id}
+                  onClick={() => onChange({ runtime: option.id })}
+                  className={classNames(
+                    "flex-1 rounded-md px-1.5 py-1 text-[11px] font-medium transition-colors",
+                    option.id === runtime
+                      ? "bg-accent text-accent-ink"
+                      : "bg-raised text-ink-soft hover:bg-hover hover:text-ink",
+                  )}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+            <p className="pt-1.5 text-[10px] leading-snug text-ink-faint">
+              {RUNTIMES.find((option) => option.id === runtime)?.blurb ??
+                RUNTIMES[0].blurb}
             </p>
           </div>
         </div>

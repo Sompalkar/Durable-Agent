@@ -298,10 +298,10 @@ export const api = {
     return request("/api/sessions/models");
   },
 
-  /** Switch the model or effort a session runs on. */
+  /** Switch the model, effort or runtime a session runs on. */
   configureSession(
     id: string,
-    next: { model?: string; effort?: string },
+    next: { model?: string; effort?: string; runtime?: string },
   ): Promise<{ session: SessionSummary }> {
     return request(`/api/sessions/${id}`, {
       method: "PATCH",

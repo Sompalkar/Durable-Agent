@@ -133,6 +133,11 @@ export interface SessionSummary extends SessionListItem {
   plan: PlanStep[];
   turnsUsed: number;
   turnLimit: number | null;
+  /**
+   * Where this session's work happens: "durable" rents a container per command,
+   * "sandbox" keeps one alive between turns.
+   */
+  runtime: string;
   /** Model and effort this session runs on. Changeable per session. */
   model: string;
   effort: string;

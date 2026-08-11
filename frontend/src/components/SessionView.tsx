@@ -113,7 +113,7 @@ export function SessionView({ sessionId }: { sessionId: string }) {
 
   /** Switch model or effort. Takes effect on the next turn. */
   const configure = useCallback(
-    async (next: { model?: string; effort?: string }) => {
+    async (next: { model?: string; effort?: string; runtime?: string }) => {
       const { session: updated } = await api.configureSession(sessionId, next);
       setSession(updated);
     },
@@ -283,6 +283,7 @@ export function SessionView({ sessionId }: { sessionId: string }) {
               <ModelPicker
                 models={models}
                 efforts={efforts}
+                runtime={session.runtime}
                 model={session.model}
                 effort={session.effort}
                 disabled={stream.streaming}
