@@ -414,6 +414,79 @@ const SANDBOX_TOOLS: Anthropic.Tool[] = [
  * that is thrown away each turn would put the two sources of truth into
  * disagreement, and the Durable Object has to win that argument.
  */
+/**
+ * Processes that keep running after the tool call returns.
+ *
+ * Separate from run_command because the two want opposite things: run_command
+ * waits for the command to end, and a dev server's whole job is not to end.
+ */
+const PROCESS_TOOLS: Anthropic.Tool[] = [
+	{
+		name: 'start_process',
+		description:
+			'Start a long-running process in the sandbox and return immediately, leaving it running. ' +
+			'Use this for anything that does not exit on its own — a dev server, a watcher, a queue worker. ' +
+			'Use run_command instead for anything that finishes, like a build or a test run. ' +
+			'Give it a short name so you can read its output or stop it later. ' +
+			'The process keeps running between turns only on the always-on runtime; on the on-demand ' +
+			'runtime the container is destroyed at the end of the turn and takes the process with it, ' +
+			'so start it and use it in the same turn. ' +
+			'Early output is returned so you can see straight away if it failed to bind a port.',
+		input_schema: {
+			type: 'object',
+			properties: {
+				name: {
+					type: 'string',
+					description: 'Short label, e.g. "dev" or "api". Used to read or stop it later.',
+				},
+				command: {
+					type: 'string',
+					description: 'The command to run, e.g. "npm run dev". Runs in the repository root.',
+				},
+				wait_ms: {
+					type: 'number',
+					description:
+						'How long to wait before reporting back, so a fast failure is caught. Defaults to 3000.',
+				},
+			},
+			required: ['name', 'command'],
+		},
+	},
+	{
+		name: 'list_processes',
+		description:
+			'List processes started in this sandbox, whether each is still alive, and the port it ' +
+			'appears to be listening on. Check here before starting something that may already be running.',
+		input_schema: { type: 'object', properties: {} },
+	},
+	{
+		name: 'read_process_output',
+		description:
+			'Read recent output from a running process. This is where a dev server reports the port it ' +
+			'bound, the compile errors it hit, and the requests it served — check it before assuming ' +
+			'a server is healthy.',
+		input_schema: {
+			type: 'object',
+			properties: {
+				name: { type: 'string', description: 'The name given to start_process.' },
+				lines: { type: 'number', description: 'How many trailing lines to return. Defaults to 40.' },
+			},
+			required: ['name'],
+		},
+	},
+	{
+		name: 'stop_process',
+		description:
+			'Stop a process started with start_process. Stop a dev server when you are done with it ' +
+			'rather than leaving it holding a port.',
+		input_schema: {
+			type: 'object',
+			properties: { name: { type: 'string', description: 'The name given to start_process.' } },
+			required: ['name'],
+		},
+	},
+];
+
 const BROWSER_TOOLS: Anthropic.Tool[] = [
 	{
 		name: 'screenshot',
@@ -528,7 +601,8 @@ export function buildToolDefinitions(options: {
 		...SCHEDULE_TOOLS,
 		...PROPOSAL_TOOLS,
 		...(options.sandbox ? SANDBOX_TOOLS : []),
-		// Needs a container: there is no way to render a page without one.
+		// Both need a container: nothing to keep running, and nothing to render on.
+		...(options.sandbox ? PROCESS_TOOLS : []),
 		...(options.sandbox ? BROWSER_TOOLS : []),
 		// Needs both: a checkout to inspect, and a container to inspect it in.
 		...(options.sandbox && options.repo ? GIT_TOOLS : []),

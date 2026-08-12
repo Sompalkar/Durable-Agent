@@ -81,6 +81,16 @@ Change as little as possible. A reviewer reads a diff, and every unrelated edit
 costs you their attention. Do not reformat files you did not need to touch, and
 do not fix things nobody asked about.
 
+# Running something that does not stop
+
+run_command waits for a command to finish, so it is the wrong tool for a dev
+server. Use start_process for anything that keeps running, and run_command for
+anything that ends — a build, a test run, an install.
+
+After starting a server, read its output before assuming it works. That is where
+it reports the port it bound and the errors it hit. Stop it when you are done
+rather than leaving it holding a port.
+
 # Looking at what you built
 
 If you changed anything a person sees, take a screenshot before you say it is

@@ -15,6 +15,13 @@ import type { AgentWorkspace } from './workspace/types';
 import type { AgentEvent, PlanStatus, PlanStep, Proposal, ToolOutcome } from '../types';
 import { GitHubClient } from '../github/client';
 import { captureScreenshot } from './screenshot';
+import {
+	listProcesses,
+	readProcessLog,
+	startProcess,
+	stopProcess,
+	type BackgroundProcess,
+} from './processes';
 import type { RepoCheckout, SandboxProvider } from './sandbox';
 
 /** Everything a tool might need, assembled once per turn. */
@@ -435,6 +442,87 @@ const HANDLERS: Record<string, ToolHandler> = {
 		);
 	},
 
+	// ------------------------------------------------------------- processes
+
+	async start_process(input, context) {
+		const { sandbox, repo } = context;
+		if (!sandbox) throw new Error('No sandbox is configured, so processes are unavailable.');
+
+		const { process, earlyOutput } = await startProcess(
+			sandbox,
+			{
+				name: requireString(input.name, 'name'),
+				command: requireString(input.command, 'command'),
+				// Bounded: a long wait here holds the whole turn open for nothing.
+				readyMs: Math.min(20_000, Math.max(1_000, Number(input.wait_ms) || 3_000)),
+			},
+			repo?.checkout ?? null,
+		);
+
+		const where = process.port
+			? `It appears to be listening on port ${process.port} — reach it at http://localhost:${process.port}.`
+			: 'No port was detected yet. Read its output if you expected one.';
+
+		// The warning is here rather than only in the tool description because
+		// this is the moment it matters, and the model reads results more
+		// carefully than it re-reads schemas.
+		const lifetime = context.filesLiveInSandbox
+			? 'It will keep running between turns.'
+			: 'This session is on the on-demand runtime, so the container — and this process — ' +
+				'will be destroyed when the turn ends. Use it now, in this turn.';
+
+		return {
+			ok: true,
+			content: [`Started "${process.name}" (pid ${process.pid}).`, where, lifetime, earlyOutput ? `Early output:\n${earlyOutput}` : '']
+				.filter(Boolean)
+				.join('\n\n'),
+			summary: `started ${process.name}${process.port ? ` on :${process.port}` : ''}`,
+			...(earlyOutput ? { output: earlyOutput } : {}),
+		};
+	},
+
+	async list_processes(_input, context) {
+		const { sandbox, repo } = context;
+		if (!sandbox) throw new Error('No sandbox is configured, so processes are unavailable.');
+
+		const processes = await listProcesses(sandbox, repo?.checkout ?? null);
+		if (processes.length === 0) {
+			return ok('No processes have been started in this sandbox.', 'no processes');
+		}
+		return ok(processes.map(describeProcess).join('\n'), `${processes.length} process(es)`);
+	},
+
+	async read_process_output(input, context) {
+		const { sandbox, repo } = context;
+		if (!sandbox) throw new Error('No sandbox is configured, so processes are unavailable.');
+
+		const name = requireString(input.name, 'name');
+		const log = await readProcessLog(
+			sandbox,
+			repo?.checkout ?? null,
+			name,
+			Number(input.lines) || undefined,
+		);
+
+		return {
+			ok: true,
+			content: log ? `Output from "${name}":\n\n${tail(log)}` : `"${name}" has produced no output yet.`,
+			summary: `read ${name} output`,
+			output: log ? keepTail(log, MAX_PERSISTED_OUTPUT_CHARS) : `${name}: no output yet`,
+		};
+	},
+
+	async stop_process(input, context) {
+		const { sandbox, repo } = context;
+		if (!sandbox) throw new Error('No sandbox is configured, so processes are unavailable.');
+
+		const name = requireString(input.name, 'name');
+		const stopped = await stopProcess(sandbox, repo?.checkout ?? null, name);
+		return stopped
+			? ok(`Stopped "${name}".`, `stopped ${name}`)
+			: ok(`"${name}" had already exited; cleaned it up.`, `${name} already stopped`);
+	},
+
 	// --------------------------------------------------------------- browser
 
 	async screenshot(input, context) {
@@ -759,6 +847,13 @@ const GIT_COMMANDS: Record<string, { build: (path: string) => string; requiresPa
 	// would print nothing. Reporting the commit is the honest equivalent.
 	base: { build: () => "git --no-pager log -1 --format='%h %an %ad %s' --date=short" },
 };
+
+/** One line describing a process, for the model to read. */
+function describeProcess(process: BackgroundProcess): string {
+	const state = process.running ? 'running' : 'exited';
+	const port = process.port ? ` · port ${process.port}` : '';
+	return `${process.name}  [${state}, pid ${process.pid}${port}]  ${process.command}`;
+}
 
 /**
  * A stable, readable filename for a captured page.
