@@ -283,6 +283,36 @@ export class DaytonaSandbox implements SandboxProvider {
 		this.checkedOut = repo.commitSha;
 	}
 
+	/**
+	 * A signed URL, not the standard one.
+	 *
+	 * The standard preview URL needs an `x-daytona-preview-token` header, which a
+	 * browser cannot attach to a link the user clicks. A signed URL carries its
+	 * own authentication, so it works by being opened.
+	 */
+	async previewUrl(port: number, expiresInSeconds: number): Promise<string | null> {
+		if (!this.sandboxId) return null;
+		if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+			throw new SandboxError(`Port ${port} is not a valid port number.`);
+		}
+
+		const response = await fetch(
+			`${this.config.apiUrl}/sandbox/${this.sandboxId}/ports/${port}/signed-preview-url` +
+				`?expiresInSeconds=${Math.min(86_400, Math.max(60, expiresInSeconds))}`,
+			{ headers: this.headers() },
+		);
+
+		if (!response.ok) {
+			throw new SandboxError(
+				`Could not get a preview URL for port ${port} (${response.status}). ` +
+					'Check that something is listening on it.',
+			);
+		}
+
+		const body = (await response.json()) as { url?: string; signedUrl?: string };
+		return body.url ?? body.signedUrl ?? null;
+	}
+
 	async dispose(): Promise<void> {
 		if (!this.sandboxId) return;
 		try {

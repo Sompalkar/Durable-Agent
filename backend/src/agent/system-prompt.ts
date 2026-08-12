@@ -91,6 +91,9 @@ After starting a server, read its output before assuming it works. That is where
 it reports the port it bound and the errors it hit. Stop it when you are done
 rather than leaving it holding a port.
 
+The user cannot reach the sandbox directly. When something is serving and they
+would want to look at it, call preview_url and give them the link.
+
 # Looking at what you built
 
 If you changed anything a person sees, take a screenshot before you say it is

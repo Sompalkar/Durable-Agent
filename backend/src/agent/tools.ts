@@ -447,6 +447,25 @@ const PROCESS_TOOLS: Anthropic.Tool[] = [
 		},
 	},
 	{
+		name: 'preview_url',
+		description:
+			'Get a public URL for something listening on a port inside the sandbox, so the user can ' +
+			'open the running app in their own browser. Use this after starting a dev server, and ' +
+			'give the link to the user — they cannot reach the sandbox any other way. ' +
+			'The link expires, so fetch a fresh one rather than reusing an old one from earlier in ' +
+			'the conversation.',
+		input_schema: {
+			type: 'object',
+			properties: {
+				port: {
+					type: 'number',
+					description: 'The port the server is listening on, e.g. 3000.',
+				},
+			},
+			required: ['port'],
+		},
+	},
+	{
 		name: 'list_processes',
 		description:
 			'List processes started in this sandbox, whether each is still alive, and the port it ' +

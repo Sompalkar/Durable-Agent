@@ -138,6 +138,9 @@ const MAX_STREAMED_CHARS = 200_000;
  */
 const MAX_PERSISTED_OUTPUT_CHARS = 8_000;
 
+/** How long a preview link stays valid. Long enough to demo, short enough to expire. */
+const PREVIEW_TTL_SECONDS = 3_600;
+
 const HANDLERS: Record<string, ToolHandler> = {
 	// ----------------------------------------------------------------- files
 
@@ -457,8 +460,14 @@ const HANDLERS: Record<string, ToolHandler> = {
 			repo?.checkout ?? null,
 		);
 
+		// Fetched here rather than left to a second tool call: a dev server the user
+		// cannot open is not much of a dev server.
+		const link = process.port ? await previewLink(sandbox, process.port) : null;
 		const where = process.port
-			? `It appears to be listening on port ${process.port} — reach it at http://localhost:${process.port}.`
+			? `Listening on port ${process.port}.` +
+				(link
+					? ` The user can open it at ${link} — give them that link.`
+					: ` Inside the sandbox it is http://localhost:${process.port}.`)
 			: 'No port was detected yet. Read its output if you expected one.';
 
 		// Stated here, not only in the schema: a result is read more carefully.
@@ -475,6 +484,28 @@ const HANDLERS: Record<string, ToolHandler> = {
 			summary: `started ${process.name}${process.port ? ` on :${process.port}` : ''}`,
 			...(earlyOutput ? { output: earlyOutput } : {}),
 		};
+	},
+
+	async preview_url(input, context) {
+		const { sandbox } = context;
+		if (!sandbox) throw new Error('No sandbox is configured, so there is nothing to preview.');
+		if (!sandbox.previewUrl) {
+			throw new Error(`The ${sandbox.name} sandbox cannot expose ports publicly.`);
+		}
+
+		const port = requireNumber(input.port, 'port');
+		const url = await sandbox.previewUrl(port, PREVIEW_TTL_SECONDS);
+		if (!url) {
+			throw new Error(
+				'No sandbox is running yet. Start a server first, then ask for its preview URL.',
+			);
+		}
+
+		return ok(
+			`The app on port ${port} is available at ${url}\n\n` +
+				`Give this link to the user. It expires in ${PREVIEW_TTL_SECONDS / 3600} hour(s).`,
+			`preview on :${port}`,
+		);
 	},
 
 	async list_processes(_input, context) {
@@ -826,6 +857,12 @@ const GIT_COMMANDS: Record<string, { build: (path: string) => string; requiresPa
 	// Detached at a pinned commit, so `branch --show-current` prints nothing.
 	base: { build: () => "git --no-pager log -1 --format='%h %an %ad %s' --date=short" },
 };
+
+/** Best-effort preview link; a failure here must not fail the start it decorates. */
+async function previewLink(sandbox: SandboxProvider, port: number): Promise<string | null> {
+	if (!sandbox.previewUrl) return null;
+	return sandbox.previewUrl(port, PREVIEW_TTL_SECONDS).catch(() => null);
+}
 
 /** One line describing a process, for the model to read. */
 function describeProcess(process: BackgroundProcess): string {

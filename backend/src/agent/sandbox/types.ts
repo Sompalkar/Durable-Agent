@@ -80,6 +80,14 @@ export interface SandboxProvider {
 	 */
 	run(options: RunOptions): Promise<CommandResult>;
 
+	/**
+	 * A public URL for something listening on `port` inside the sandbox.
+	 *
+	 * Optional: not every provider can expose a port. Returns null when this one
+	 * cannot, or when no sandbox is running yet.
+	 */
+	previewUrl?(port: number, expiresInSeconds: number): Promise<string | null>;
+
 	/** Tear the sandbox down. Best-effort; never throws. */
 	dispose(): Promise<void>;
 }
