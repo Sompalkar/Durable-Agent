@@ -1,14 +1,9 @@
 /**
- * What the file tools are allowed to assume about where files live.
+ * Where the file tools read and write.
  *
- * Until now the tools held a Durable Object stub directly, which made the
- * storage decision at every call site. This interface moves that decision to
- * one place, so a session can run its files out of SQLite or out of a real
- * container without the tools knowing which.
- *
- * The shape is deliberately the one the Durable Object already exposes: making
- * the existing implementation satisfy it without changes is what keeps the
- * refactor honest, and it is the container that has to do the adapting.
+ * One interface, two backings: the Durable Object's SQLite, or the container's
+ * filesystem when the session runs on the sandbox runtime. The shape is the one
+ * the Durable Object already exposes, so it satisfies this unchanged.
  */
 
 import type { FileRecord, FileRevision, FileWithContent, GrepMatch } from '../../types';
@@ -20,11 +15,9 @@ export interface AgentWorkspace {
 	grep(pattern: string, options?: { pathPattern?: string; limit?: number }): Promise<GrepMatch[]>;
 	write(path: string, content: string, summary?: string): Promise<FileRecord>;
 	/**
-	 * Write many files as one operation.
-	 *
-	 * Not a convenience: a Worker invocation has fifty subrequests, and a command
-	 * that touched forty files would spend forty of them writing back one at a
-	 * time. Implementations must do this in a bounded number of round trips.
+	 * Write many files in a bounded number of round trips. A command that touched
+	 * forty files would otherwise spend forty of the invocation's fifty
+	 * subrequests writing them back one at a time.
 	 */
 	writeMany(
 		files: Array<{ path: string; content: string }>,
@@ -35,13 +28,9 @@ export interface AgentWorkspace {
 	move(from: string, to: string): Promise<FileRecord>;
 
 	/**
-	 * Version history for one file.
-	 *
-	 * Every backing store has to provide this, including one whose files live on
-	 * a real disk. A filesystem has no revisions of its own, so an implementation
-	 * over a container keeps the log somewhere that survives the container —
-	 * otherwise diffs and pull requests stop working the moment a user switches
-	 * runtime, which would make the choice a trap rather than a setting.
+	 * A filesystem has no revisions, so an implementation over a container keeps
+	 * the log somewhere that outlives it — otherwise diffs and pull requests
+	 * would break the moment a user switched runtime.
 	 */
 	history(path: string, limit?: number): Promise<FileRevision[]>;
 	restore(path: string, version: number): Promise<FileRecord>;

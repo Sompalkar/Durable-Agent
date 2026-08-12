@@ -1,15 +1,9 @@
 /**
  * Letting the agent look at what it built.
  *
- * An agent that writes a React component and never sees it rendered is working
- * blind: it can tell you the tests pass, not that the button is off the screen.
- * A screenshot closes that loop, and it is the one capability that genuinely
- * needs a container — there is no way to fake a browser in a database.
- *
- * Chromium is downloaded on first use and cached. That download is slow enough
- * (~150MB) to be painful on a container that is destroyed after every turn, and
- * nearly free on one that is kept warm, which is why this reads much better on
- * the sandbox runtime. It works on either.
+ * Chromium is downloaded on first use and cached — ~150MB, painful on a
+ * container destroyed every turn and nearly free on a warm one, which is why
+ * this suits the sandbox runtime. It works on either.
  */
 
 import type { SandboxProvider } from './sandbox';
@@ -17,18 +11,12 @@ import type { SandboxProvider } from './sandbox';
 /** Written once Chromium is present, so the download happens at most once. */
 const BROWSER_MARKER = '/tmp/.agent-browser-ready';
 
-/** Pinned so a container warmed yesterday and one warmed today behave the same. */
+/** Pinned so a container warmed yesterday behaves like one warmed today. */
 const PLAYWRIGHT_VERSION = '1.49.1';
 
 const DEFAULT_VIEWPORT = '1280,800';
 
-/**
- * Ceiling on the returned image.
- *
- * Sized backwards from the 512KB workspace file limit: the PNG is stored as
- * base64, which is a third larger again, so 300KB of image is about 400KB of
- * stored text and leaves headroom.
- */
+/** Sized back from the 512KB file limit: base64 adds a third, so this fits. */
 const MAX_IMAGE_BYTES = 300 * 1024;
 
 export interface ScreenshotRequest {
@@ -54,11 +42,8 @@ export class ScreenshotError extends Error {
 }
 
 /**
- * Take one screenshot inside the container.
- *
- * Console errors come back alongside the image on purpose. A blank page is the
- * most common result when something is wrong, and a blank screenshot on its own
- * tells the agent nothing it can act on — the stack trace behind it does.
+ * Console errors come back with the image on purpose: a blank page is the usual
+ * result when something is wrong, and the image alone says nothing actionable.
  */
 export async function captureScreenshot(
 	sandbox: SandboxProvider,
@@ -70,7 +55,7 @@ export async function captureScreenshot(
 	const result = await sandbox.run({
 		command: script,
 		files: [],
-		// Generous: the first run downloads a browser. Later runs are seconds.
+		// The first run downloads a browser; later runs take seconds.
 		timeoutSeconds: 240,
 		...(repo ? { repo } : {}),
 	});
@@ -101,14 +86,9 @@ export async function captureScreenshot(
 }
 
 /**
- * The shell script that does the work.
- *
- * Written as a here-doc rather than a chain of flags so the browser can be
- * driven properly — the Playwright CLI can take a screenshot, but it cannot
- * also report the console errors, and those are half the value.
- *
- * `--no-sandbox` is required because the container is not privileged. That is a
- * Chromium sandbox, not ours; the container is still the isolation boundary.
+ * A script rather than the Playwright CLI, which can screenshot but cannot also
+ * report console errors. `--no-sandbox` is needed because the container is not
+ * privileged — that disables Chromium's sandbox, not ours.
  */
 function buildCaptureScript(request: ScreenshotRequest): string {
 	const setup = [
@@ -146,8 +126,7 @@ const options = ${options};
   await page.waitForTimeout(options.settleMs);
   const shot = await page.screenshot({ fullPage: options.fullPage });
   await browser.close();
-  // Delimited rather than pretty-printed: the caller has to find these in a
-  // stream that also contains npm noise it cannot fully silence.
+  // Delimited: the caller reads these out of a stream containing npm noise.
   console.log('__IMAGE__' + shot.toString('base64'));
   console.log('__CONSOLE__' + JSON.stringify(errors));
 })().catch((error) => {
@@ -166,11 +145,8 @@ const options = ${options};
 }
 
 /**
- * Exact decoded size of a base64 string.
- *
- * The naive `length * 3 / 4` overshoots by up to two bytes because it counts
- * the padding, which is enough to make a reported size wrong and, at the
- * boundary, to reject an image that would actually have fit.
+ * Exact, not `length * 3 / 4` — that counts the padding, overshooting by up to
+ * two bytes and rejecting a boundary-sized image that would have fit.
  */
 function decodedSize(base64: string): number {
 	const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0;

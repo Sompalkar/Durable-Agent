@@ -1,27 +1,16 @@
 /**
- * Long-running processes inside the container.
+ * Long-running processes inside the container — dev servers, watchers.
  *
- * `run_command` waits for a command to finish, which is exactly wrong for a dev
- * server: the thing you want is for it to *not* finish. These start a process,
- * return immediately, and leave it serving.
- *
- * A process outlives the turn only on the always-on runtime. On the on-demand
- * runtime the container is destroyed when the turn ends and the process goes
- * with it — which is honest, and the tool says so rather than letting the agent
- * discover it by starting a server that has vanished by the next message.
- *
- * State lives in the container rather than the Durable Object on purpose. A
- * process list is only true of the machine it is running on, and a copy in a
- * database would confidently describe processes that died with a container an
- * hour ago.
+ * State lives in the container, not the Durable Object: a process list is only
+ * true of the machine running it, and a copy in a database would confidently
+ * describe processes that died with a container an hour ago.
  */
 
 import type { SandboxProvider } from './sandbox';
 
-/** One directory per container holding a pid, a log, and the original command. */
+/** One directory per process, holding its pid, log, and original command. */
 const PROC_DIR = '/tmp/.agent-procs';
 
-/** Lines of log returned by default — enough for a stack trace, not a whole build. */
 const DEFAULT_LOG_LINES = 40;
 
 export interface BackgroundProcess {
@@ -44,11 +33,8 @@ type Repo = { cloneUrl: string; branch: string; commitSha: string } | null;
 
 /**
  * Start a process and return once it is launched, not once it is finished.
- *
- * The caller gets a short slice of early output because the most common failure
- * — a port already in use, a missing dependency — happens in the first second,
- * and reporting "started" for a process that already died would be a lie the
- * agent then builds on.
+ * Early output comes back too: a port clash or missing dependency shows up in
+ * the first second, and reporting "started" for a dead process compounds.
  */
 export async function startProcess(
 	sandbox: SandboxProvider,
@@ -60,39 +46,30 @@ export async function startProcess(
 
 	const script = [
 		`mkdir -p ${quote(dir)}`,
-		// Refuse rather than silently replace: two dev servers with one name is a
-		// confusion the agent cannot see and cannot recover from.
+		// Refuse rather than replace: two servers under one name is unrecoverable.
 		`if [ -f ${quote(`${dir}/pid`)} ] && kill -0 "$(cat ${quote(`${dir}/pid`)})" 2>/dev/null; then`,
 		`  echo __ALREADY_RUNNING__; exit 0;`,
 		`fi`,
 		`printf '%s' ${quote(options.command)} > ${quote(`${dir}/cmd`)}`,
 		`: > ${quote(`${dir}/log`)}`,
-		// The child writes its own pid and then execs, so the pid file names the
-		// process we actually care about.
-		//
-		// The obvious `cmd & echo $!` does not work here: `setsid` forks when it is
-		// already a process group leader, which it is when backgrounded from a
-		// shell. `$!` would be setsid's pid, and setsid exits immediately — so the
-		// process would be reported dead while still serving, and stop would kill
-		// a pid that no longer exists.
-		//
-		// A launcher file avoids nesting three levels of shell quoting around a
-		// command the model wrote.
+		// The child writes its own pid, then execs. `cmd & echo $!` would record
+		// setsid's pid — setsid forks when backgrounded and exits immediately, so
+		// the process would read as dead while still serving. A launcher file also
+		// avoids nesting three levels of quoting around a model-written command.
 		`cat > ${quote(`${dir}/run.sh`)} <<'AGENT_PROC_EOF'`,
 		`#!/bin/sh`,
 		`echo $$ > "$1/pid"`,
 		`exec sh -c "$2"`,
 		`AGENT_PROC_EOF`,
 		`chmod +x ${quote(`${dir}/run.sh`)}`,
-		// setsid puts the process in its own group so it outlives the exec session
-		// and can later be signalled as a group. Not every image has it.
+		// Own process group, so it outlives the exec session and can be signalled
+		// as a group later. Not every image ships setsid.
 		`if command -v setsid >/dev/null 2>&1; then`,
 		`  setsid nohup ${quote(`${dir}/run.sh`)} ${quote(dir)} ${quote(options.command)} > ${quote(`${dir}/log`)} 2>&1 < /dev/null &`,
 		`else`,
 		`  nohup ${quote(`${dir}/run.sh`)} ${quote(dir)} ${quote(options.command)} > ${quote(`${dir}/log`)} 2>&1 < /dev/null &`,
 		`fi`,
-		// Also gives the launcher time to write its pid before it is read back —
-		// the minimum is a second, which is ample for one echo.
+		// Also covers the launcher writing its pid before it is read back.
 		`sleep ${Math.max(1, Math.round(options.readyMs / 1000))}`,
 		`if kill -0 "$(cat ${quote(`${dir}/pid`)})" 2>/dev/null; then echo __ALIVE__; else echo __EXITED__; fi`,
 		`echo __LOG__`,
@@ -132,11 +109,8 @@ export async function startProcess(
 }
 
 /**
- * Everything currently registered, with whether it is actually alive.
- *
- * Liveness is checked against the kernel rather than trusted from the registry,
- * because a crashed dev server leaves its pid file behind and reporting it as
- * running is worse than not listing it at all.
+ * Everything registered, with liveness checked against the kernel rather than
+ * trusted from the registry — a crashed server leaves its pid file behind.
  */
 export async function listProcesses(
 	sandbox: SandboxProvider,
@@ -151,8 +125,7 @@ export async function listProcesses(
 		`  pid=$(cat "$d/pid" 2>/dev/null);`,
 		`  cmd=$(cat "$d/cmd" 2>/dev/null);`,
 		`  if kill -0 "$pid" 2>/dev/null; then alive=1; else alive=0; fi;`,
-		// Ports come from the log rather than from `ss` or `lsof`, which are not
-		// guaranteed to be installed and need privileges we do not have.
+		// From the log, not `ss`/`lsof`: neither is guaranteed to be installed.
 		`  port=$(grep -oE 'https?://[^ ]*:[0-9]+|:[0-9]{4,5}' "$d/log" 2>/dev/null | grep -oE '[0-9]{4,5}' | head -1);`,
 		`  printf '%s\\t%s\\t%s\\t%s\\n' "$(basename "$d")" "$pid" "$alive" "$port";`,
 		`  printf '__CMD__%s\\n' "$cmd";`,
@@ -208,11 +181,8 @@ export async function readProcessLog(
 }
 
 /**
- * Stop a process.
- *
- * TERM first, then KILL after a grace period. A dev server given TERM closes
- * its port cleanly; one given KILL can leave the port bound for long enough
- * that the next start fails for a reason that looks unrelated.
+ * TERM first, then KILL. A server given TERM releases its port cleanly; one
+ * given KILL can leave it bound long enough to break the next start.
  */
 export async function stopProcess(
 	sandbox: SandboxProvider,
@@ -224,8 +194,7 @@ export async function stopProcess(
 		`pid=$(cat ${quote(`${dir}/pid`)} 2>/dev/null);`,
 		`if [ -z "$pid" ]; then echo __NOT_FOUND__; exit 0; fi;`,
 		`if ! kill -0 "$pid" 2>/dev/null; then rm -rf ${quote(dir)}; echo __ALREADY_STOPPED__; exit 0; fi;`,
-		// Negative pid targets the whole process group, so a server that forked
-		// workers does not leave them behind holding the port.
+		// Negative pid signals the group, so forked workers go too.
 		`kill -TERM -"$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null;`,
 		`sleep 2;`,
 		`if kill -0 "$pid" 2>/dev/null; then kill -KILL -"$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null; fi;`,
@@ -247,10 +216,7 @@ export async function stopProcess(
 }
 
 /**
- * Constrain a name to something safe to put in a path.
- *
- * The name reaches the shell inside a quoted path, so this is defence in depth
- * rather than the only guard — but a name containing `..` would escape the
+ * Defence in depth — the name is shell-quoted anyway, but `..` would escape the
  * process directory even when perfectly quoted.
  */
 function safeName(name: string): string {

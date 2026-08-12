@@ -1,21 +1,16 @@
 /**
  * A workspace whose files live in the container.
  *
- * This is the Devin-shaped runtime: the checkout on disk is what the agent
- * reads and writes, so files a command produced — a scaffolded project, a
- * generated client, anything `npm` wrote — are visible to the file tools the
- * moment they exist. In the Durable-Object runtime they are invisible until
- * something copies them back.
+ * The checkout on disk is what the agent reads and writes, so files a command
+ * produced are visible immediately — in the Durable-Object runtime they stay
+ * invisible until something copies them back.
  *
- * History still lives in the Durable Object. A filesystem has no revisions, and
- * dropping them would mean diffs and pull requests quietly stopped working the
- * moment somebody changed runtime — a setting that breaks features is a trap,
- * not a choice. So every write goes to both: the container because that is what
- * runs, the object because that is what remembers.
+ * Writes go to both: the container because that is what runs, the object
+ * because a filesystem has no revisions and dropping them would break diffs and
+ * pull requests the moment somebody switched runtime.
  *
- * Each operation is a shell round trip, which is a subrequest, and a Worker
- * invocation only has fifty. Operations are therefore batched into single
- * commands wherever possible, and none of them loops per file.
+ * Every operation is a subrequest and an invocation has fifty, so operations
+ * batch into single commands and none loops per file.
  */
 
 import type { FileRecord, FileRevision, FileWithContent, GrepMatch } from '../../types';
@@ -33,11 +28,7 @@ import type { AgentWorkspace } from './types';
 /** Where the checkout lives inside the container. Matches the provider's. */
 const WORKDIR = '/home/daytona/workspace';
 
-/**
- * Directories never worth listing, searching, or reporting as the agent's work.
- * Shared in spirit with the change-detection prune list — a workspace listing
- * that includes `node_modules` is unusable.
- */
+/** A workspace listing that includes `node_modules` is unusable. */
 const SKIP_DIRECTORIES = [
 	'node_modules',
 	'.git',
@@ -55,19 +46,16 @@ const SKIP_DIRECTORIES = [
 	'vendor',
 ];
 
-/** Ceiling on a listing, so a large repository cannot fill the context window. */
+/** So a large repository cannot fill the context window. */
 const MAX_LISTED_FILES = 400;
 
-/** Matches the Durable Object's own limit, so behaviour does not change with runtime. */
+/** Matches the Durable Object's limit, so behaviour is runtime-independent. */
 const MAX_FILE_BYTES = 512 * 1024;
 
 export class SandboxWorkspace implements AgentWorkspace {
 	constructor(
 		private readonly sandbox: SandboxProvider,
-		/**
-		 * The Durable Object, kept for the things a filesystem cannot do:
-		 * remembering what a file used to look like.
-		 */
+		/** Kept for what a filesystem cannot do: remember earlier versions. */
 		private readonly durable: AgentWorkspace,
 		/** Applied before the first command, so the checkout exists to read. */
 		private readonly repo: { cloneUrl: string; branch: string; commitSha: string } | null,
@@ -79,13 +67,9 @@ export class SandboxWorkspace implements AgentWorkspace {
 		const scope = directory ? relativeOf(directory) : '';
 		const target = scope ? `./${scope}` : '.';
 
-		// One `find`, printing size and mtime alongside the path, so a listing is
-		// a single round trip rather than a stat per file.
-		//
-		// `-printf` is a GNU extension. The container is Linux so it is there, but
-		// the failure mode if it were not — stderr swallowed, an empty listing, an
-		// agent told its workspace has no files — is bad enough to be worth one
-		// fallback that reports paths without sizes rather than reporting nothing.
+		// One `find` with size and mtime inline, so a listing is one round trip
+		// rather than a stat per file. `-printf` is GNU-only; without the fallback
+		// a non-GNU find would swallow its error and report an empty workspace.
 		const prune = pruneExpression();
 		const listing = await this.exec(
 			`{ find ${quote(target)} ${prune} -type f -printf '%s\\t%T@\\t%P\\n' 2>/dev/null ` +
@@ -109,9 +93,7 @@ export class SandboxWorkspace implements AgentWorkspace {
 				};
 			});
 
-		// Versions come from the object in one call, then are merged by path. Doing
-		// it per file would be one subrequest each and exhaust the budget on a
-		// listing alone.
+		// One call, merged by path — per file would exhaust the subrequest budget.
 		const known = new Map((await this.durable.list()).map((file) => [file.path, file.version]));
 		for (const record of records) {
 			const version = known.get(record.path);
@@ -125,8 +107,7 @@ export class SandboxWorkspace implements AgentWorkspace {
 		const normalized = normalizePath(path);
 		const relative = relativeOf(normalized);
 
-		// Base64 both ways: file contents are arbitrary bytes, and shell output is
-		// not a safe channel for them otherwise.
+		// Base64: file contents are arbitrary bytes, shell output is not binary-safe.
 		const encoded = await this.exec(
 			`if [ -f ${quote(relative)} ]; then base64 -w0 ${quote(relative)}; else echo __MISSING__; fi`,
 		);
@@ -148,8 +129,7 @@ export class SandboxWorkspace implements AgentWorkspace {
 	}
 
 	async glob(pattern: string): Promise<FileRecord[]> {
-		// Matched in the Worker against a single listing rather than translated
-		// into `find` syntax, so glob semantics are identical in both runtimes.
+		// Matched here rather than translated to `find`, so both runtimes agree.
 		return (await this.list()).filter((file) => matchesGlob(file.path, pattern));
 	}
 
@@ -160,8 +140,7 @@ export class SandboxWorkspace implements AgentWorkspace {
 		const limit = options.limit ?? 100;
 		const excludes = SKIP_DIRECTORIES.map((name) => `--exclude-dir=${quote(name)}`).join(' ');
 
-		// `-E` for the same regex dialect the object's implementation uses, and
-		// `-I` to skip binary files rather than print "Binary file matches".
+		// `-E` matches the object's regex dialect; `-I` skips binary files.
 		const output = await this.exec(
 			`grep -rnIE ${excludes} -e ${quote(pattern)} . 2>/dev/null | head -${limit * 2}`,
 			{ allowFailure: true },
@@ -170,8 +149,7 @@ export class SandboxWorkspace implements AgentWorkspace {
 		const matches: GrepMatch[] = [];
 		for (const line of output.split('\n')) {
 			if (!line) continue;
-			// `./src/a.ts:12:text` — split only on the first two colons, because the
-			// matched text will very often contain more.
+			// Split on the first two colons only; matched text often contains more.
 			const first = line.indexOf(':');
 			const second = line.indexOf(':', first + 1);
 			if (first === -1 || second === -1) continue;
@@ -208,15 +186,11 @@ export class SandboxWorkspace implements AgentWorkspace {
 			].join(' && '),
 		);
 
-		// The object records the revision and owns the version number, so the two
-		// runtimes produce the same history for the same edits.
+		// The object owns the version number, so both runtimes agree on history.
 		return this.durable.write(normalized, content, summary);
 	}
 
-	/**
-	 * Write a batch in two round trips regardless of how many files there are:
-	 * one shell command that decodes all of them, one call to the object.
-	 */
+	/** Two round trips regardless of file count: one shell command, one call. */
 	async writeMany(
 		files: Array<{ path: string; content: string }>,
 		summary = 'write',
@@ -283,11 +257,8 @@ export class SandboxWorkspace implements AgentWorkspace {
 	}
 
 	/**
-	 * Restore an old revision.
-	 *
-	 * The object holds the content, but the container is what runs — so the
-	 * restored text has to be written back to disk, or the next command would
-	 * still see the version the user just undid.
+	 * The object holds the content, but the container is what runs — so restored
+	 * text goes back to disk, or the next command sees the version just undone.
 	 */
 	async restore(path: string, version: number): Promise<FileRecord> {
 		const record = await this.durable.restore(path, version);
@@ -322,11 +293,8 @@ export class SandboxWorkspace implements AgentWorkspace {
 }
 
 /**
- * Apply an edit with the same tolerance the Durable Object uses.
- *
- * Shared deliberately: an edit that succeeds in one runtime and fails in the
- * other would be the worst kind of difference between them, because it would
- * only show up once somebody switched.
+ * Same tolerance the Durable Object uses. An edit that succeeded in one runtime
+ * and failed in the other would only show up once somebody switched.
  */
 function applyEdit(content: string, oldText: string, newText: string, path: string): string {
 	const first = content.indexOf(oldText);
@@ -358,7 +326,7 @@ function applyEdit(content: string, oldText: string, newText: string, path: stri
 	);
 }
 
-/** `find` arguments that skip generated directories entirely rather than filtering after. */
+/** Skips generated directories entirely rather than filtering afterwards. */
 function pruneExpression(): string {
 	const names = SKIP_DIRECTORIES.map((name) => `-name ${quote(name)}`).join(' -o ');
 	return `\\( ${names} \\) -prune -o`;

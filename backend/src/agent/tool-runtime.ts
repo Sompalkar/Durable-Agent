@@ -35,10 +35,8 @@ export interface ToolContext {
 	 */
 	workspace: AgentWorkspace;
 	/**
-	 * True when `workspace` is backed by the container itself.
-	 *
-	 * Shell commands then skip copying files in and out: they are already there,
-	 * and doing it anyway would spend subrequests writing a file on top of itself.
+	 * True when `workspace` is the container itself, so shell commands skip
+	 * copying files in and out rather than writing them on top of themselves.
 	 */
 	filesLiveInSandbox: boolean;
 	brain: DurableObjectStub<BrainDO>;
@@ -453,7 +451,7 @@ const HANDLERS: Record<string, ToolHandler> = {
 			{
 				name: requireString(input.name, 'name'),
 				command: requireString(input.command, 'command'),
-				// Bounded: a long wait here holds the whole turn open for nothing.
+				// Bounded: a long wait holds the whole turn open for nothing.
 				readyMs: Math.min(20_000, Math.max(1_000, Number(input.wait_ms) || 3_000)),
 			},
 			repo?.checkout ?? null,
@@ -463,9 +461,7 @@ const HANDLERS: Record<string, ToolHandler> = {
 			? `It appears to be listening on port ${process.port} — reach it at http://localhost:${process.port}.`
 			: 'No port was detected yet. Read its output if you expected one.';
 
-		// The warning is here rather than only in the tool description because
-		// this is the moment it matters, and the model reads results more
-		// carefully than it re-reads schemas.
+		// Stated here, not only in the schema: a result is read more carefully.
 		const lifetime = context.filesLiveInSandbox
 			? 'It will keep running between turns.'
 			: 'This session is on the on-demand runtime, so the container — and this process — ' +
@@ -545,13 +541,10 @@ const HANDLERS: Record<string, ToolHandler> = {
 			repo?.checkout ?? null,
 		);
 
-		// Saved as a workspace file so it survives the turn and the container: the
-		// image the agent looked at is the image the user can still open tomorrow.
+		// Saved so the image outlives the container the agent viewed it in.
 		const path = `/screenshots/${screenshotName(url)}.png.b64`;
-		await workspace.write(path, shot.base64, `screenshot of ${url}`).catch(() => {
-			// Storage is a convenience. Failing to save must not lose the capture
-			// the agent is about to reason about.
-		});
+		// Storage is a convenience; failing to save must not lose the capture.
+		await workspace.write(path, shot.base64, `screenshot of ${url}`).catch(() => {});
 
 		const errors = shot.consoleErrors.slice(0, 5);
 		const notes = [
@@ -584,17 +577,14 @@ const HANDLERS: Record<string, ToolHandler> = {
 			);
 		}
 
-		// Paths are shell-quoted rather than validated, so a name with a space or
-		// a quote in it is passed through intact instead of splitting the command.
+		// Shell-quoted rather than validated, so a name with a space survives.
 		const path = typeof input.path === 'string' ? input.path.replace(/^\/+/, '').trim() : '';
 		if (builder.requiresPath && !path) {
 			throw new Error(`The "${requested}" command needs a "path".`);
 		}
 
-		// The agent's edits have to be on disk for a diff to mean anything, so the
-		// same upload the shell path performs happens here too.
-		// Nothing to push when the workspace *is* the container: the edits git
-		// needs to see are already on its disk.
+		// Edits must be on disk for a diff to mean anything.
+		// Nothing to push when the workspace is the container.
 		const files = context.filesLiveInSandbox ? [] : await workspace.list();
 		const changed = files
 			.filter((file) => context.changedPaths.has(file.path))
@@ -619,7 +609,7 @@ const HANDLERS: Record<string, ToolHandler> = {
 
 		const output = result.stdout.trim();
 		if (!output) {
-			// An empty diff is a real answer, and a confusing one to receive blank.
+			// An empty diff is a real answer, and confusing to receive blank.
 			return ok(
 				`git ${requested} produced no output — nothing has changed relative to the base commit.`,
 				`git ${requested}: no changes`,
@@ -653,9 +643,7 @@ const HANDLERS: Record<string, ToolHandler> = {
 		// Either way the Durable Object stays the source of truth: the container
 		// is destroyed at the end of the turn, and the record of what changed is
 		// what survives.
-		// Same reasoning: on the sandbox runtime the files are already in place, so
-		// the copy-in step is skipped entirely rather than rewriting each file
-		// on top of itself and spending a subrequest per file to do it.
+		// Same reasoning: already in place on the sandbox runtime.
 		const files = context.filesLiveInSandbox ? [] : await workspace.list();
 
 		// Workspace paths are absolute ("/frontend/..."), but the shell starts in
@@ -703,9 +691,8 @@ const HANDLERS: Record<string, ToolHandler> = {
 			setup: repo && input.install === true ? repo.installCommand : undefined,
 		});
 
-		// One call, not one per file. A build that touches forty files would
-		// otherwise spend forty of the invocation's fifty subrequests writing them
-		// back, and fail the turn for reasons that have nothing to do with the task.
+		// One call, not one per file: a build touching forty files would otherwise
+		// spend forty of the invocation's fifty subrequests writing them back.
 		const authored = result.changedFiles.filter((file) => isAgentAuthored(file.path));
 		if (authored.length > 0) {
 			await workspace.writeMany(
@@ -714,9 +701,8 @@ const HANDLERS: Record<string, ToolHandler> = {
 			);
 			for (const file of authored) {
 				const path = file.path.startsWith('/') ? file.path : `/${file.path}`;
-				// The container already has this content, so do not send it back next
-				// time. The version is unknown here; clearing it forces one re-read
-				// rather than risking a stale copy being pushed over a newer one.
+				// Version unknown here, so clear it: one re-read beats pushing a stale
+				// copy over a newer one.
 				context.syncedVersions.delete(path);
 				context.changedPaths.add(path);
 			}
@@ -758,11 +744,9 @@ const HANDLERS: Record<string, ToolHandler> = {
 };
 
 /**
- * Directory names that only ever contain generated output.
- *
- * The sandbox already prunes these, so this is a second line of defence: a
- * provider whose change detection is slightly wrong must not be able to write a
- * build directory into the diff, because that diff becomes a pull request.
+ * Second line of defence — the sandbox prunes these too. A provider with
+ * slightly wrong change detection must not get a build directory into the diff,
+ * because that diff becomes a pull request.
  */
 const GENERATED_DIRECTORIES = new Set([
 	'node_modules', '.git', 'dist', 'build', 'out', '.next', '.nuxt',
@@ -826,16 +810,12 @@ function truncate(content: string): string {
 
 /** Keep the last N characters — where compiler and test failures live. */
 /**
- * The git commands the agent may run, and how each is built.
- *
- * An allow-list rather than a pass-through: the agent already has a shell, so
- * the value here is not capability, it is that these are the right commands with
- * the right flags, run in the right directory, every time. `--no-pager` matters
- * because git otherwise blocks waiting for a pager that does not exist.
+ * An allow-list, not a pass-through. The agent already has a shell, so the value
+ * is that these are the right commands with the right flags every time.
+ * `--no-pager` matters — git otherwise blocks on a pager that does not exist.
  */
 const GIT_COMMANDS: Record<string, { build: (path: string) => string; requiresPath?: boolean }> = {
-	// Porcelain format is stable across git versions; the human-readable one is
-	// explicitly documented as not being.
+	// Porcelain is stable across git versions; the readable format is not.
 	status: { build: () => 'git --no-pager status --porcelain=v1 --untracked-files=all' },
 	diff: {
 		build: (path) =>
@@ -843,8 +823,7 @@ const GIT_COMMANDS: Record<string, { build: (path: string) => string; requiresPa
 	},
 	diff_stat: { build: () => 'git --no-pager diff --no-color --stat' },
 	show: { build: (path) => `git --no-pager show HEAD:${quoteForShell(path)}`, requiresPath: true },
-	// The checkout is detached at a pinned commit, so `branch --show-current`
-	// would print nothing. Reporting the commit is the honest equivalent.
+	// Detached at a pinned commit, so `branch --show-current` prints nothing.
 	base: { build: () => "git --no-pager log -1 --format='%h %an %ad %s' --date=short" },
 };
 
@@ -856,11 +835,8 @@ function describeProcess(process: BackgroundProcess): string {
 }
 
 /**
- * A stable, readable filename for a captured page.
- *
- * Derived from the URL rather than a timestamp so repeated shots of the same
- * page overwrite into one file with a version history, instead of littering the
- * workspace with near-identical images.
+ * From the URL, not a timestamp, so repeated shots of one page overwrite into a
+ * single file with history rather than littering near-identical images.
  */
 function screenshotName(url: string): string {
 	const slug = url
@@ -878,12 +854,8 @@ function quoteForShell(value: string): string {
 
 /**
  * Rewrite a leading `cd /foo` to `cd foo` when `/foo` is a top-level workspace
- * directory.
- *
- * Deliberately narrow: only the first command in the string, only an absolute
- * path, and only when the first segment is a directory the workspace actually
- * has. Anything else is left exactly as written — `cd /tmp` and `cd /usr/bin`
- * mean what they say, and silently rewriting them would be worse than failing.
+ * directory. Narrow on purpose: `cd /tmp` and `cd /usr/bin` mean what they say,
+ * and silently rewriting those would be worse than failing.
  */
 export function rerootLeadingCd(command: string, paths: string[]): string {
 	const match = /^(\s*cd\s+)(\/[^\s;&|]+)/.exec(command);

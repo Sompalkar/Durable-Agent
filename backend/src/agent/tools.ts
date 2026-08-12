@@ -404,21 +404,15 @@ const SANDBOX_TOOLS: Anthropic.Tool[] = [
 
 /** Offered only when a repository is attached — otherwise there is no repo to file against. */
 /**
- * Read-only git, run against the checkout in the sandbox.
+ * Read-only git against the checkout in the sandbox, so `git diff` is literally
+ * what the pull request will contain rather than inferred from rows.
  *
- * The container holds a real clone with the agent's edits applied on top, so
- * `git diff` there is literally what the pull request will contain — computed
- * by git rather than inferred by comparing rows.
- *
- * Nothing here writes. Committing, checking out or resetting inside a container
- * that is thrown away each turn would put the two sources of truth into
- * disagreement, and the Durable Object has to win that argument.
+ * Nothing writes: committing inside a container thrown away each turn would put
+ * the two sources of truth into disagreement, and the object has to win.
  */
 /**
- * Processes that keep running after the tool call returns.
- *
- * Separate from run_command because the two want opposite things: run_command
- * waits for the command to end, and a dev server's whole job is not to end.
+ * Processes that keep running after the tool call returns. Separate from
+ * run_command, which waits for an end a dev server is never going to reach.
  */
 const PROCESS_TOOLS: Anthropic.Tool[] = [
 	{
