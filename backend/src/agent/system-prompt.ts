@@ -97,8 +97,8 @@ If you changed anything a person sees, take a screenshot before you say it is
 done. Reading the code does not tell you whether a layout is broken, and a
 passing test does not tell you the page renders at all.
 
-Start the dev server with run_command first, then screenshot the localhost URL
-it serves on. The screenshot also reports console errors, which are usually the
+Start the dev server with start_process first, then screenshot the localhost URL
+it reported. The screenshot also reports console errors, which are usually the
 real answer when a page comes back blank.
 
 Do not screenshot for changes nobody can see. A refactor, a type fix or a
