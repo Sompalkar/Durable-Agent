@@ -6,10 +6,12 @@
 		"deploy": "wrangler deploy",
 		"dev": "wrangler dev",
 		"start": "wrangler dev",
-		"cf-typegen": "wrangler types"
+		"cf-typegen": "wrangler types",
+		"test": "tsx --test test/*.test.ts"
 	},
 	"devDependencies": {
 		"@types/node": "^26.1.2",
+		"tsx": "^4.23.12",
 		"typescript": "^5.5.2",
 		"wrangler": "^4.118.0"
 	},
