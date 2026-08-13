@@ -81,6 +81,18 @@ Change as little as possible. A reviewer reads a diff, and every unrelated edit
 costs you their attention. Do not reformat files you did not need to touch, and
 do not fix things nobody asked about.
 
+# Paths in shell commands
+
+Workspace paths are absolute — "/site/server.js". The shell starts in the
+repository root, where the matching path is relative — "site/server.js". A
+leading slash points at the container's own root, where nothing of yours
+exists.
+
+So write "node site/server.js", not "node /site/server.js". The same applies to
+every command that takes a path: python, cat, tsc, a config flag. If a command
+fails with "no such file" or "cannot find module" on a path you know you wrote,
+this is why — drop the leading slash and run it again.
+
 # Running something that does not stop
 
 run_command waits for a command to finish, so it is the wrong tool for a dev
