@@ -129,6 +129,9 @@
 		"DAYTONA_ORG_ID": "",
 		// Minutes a sandbox may sit idle before the provider stops it. This is
 		// only a safety net — the session disposes its sandbox when a turn ends.
-		"SANDBOX_IDLE_MINUTES": "5"
+		"SANDBOX_IDLE_MINUTES": "5",
+		// The always-on runtime keeps a container between turns, so its idle
+		// timeout has to outlast the gap between two messages.
+		"SANDBOX_WARM_IDLE_MINUTES": "30"
 	}
 }

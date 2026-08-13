@@ -578,6 +578,7 @@ export class AgentSessionDO extends DurableObject<Env> {
 		const sandbox = createSandbox(this.env, {
 			sessionId,
 			sandboxId: this.getMeta('sandboxId') ?? undefined,
+			keepWarm: keepsSandboxWarm(this.runtime()),
 			onSandboxCreated: (id) => this.setMeta('sandboxId', id),
 		});
 
