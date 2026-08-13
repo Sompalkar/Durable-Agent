@@ -91,10 +91,13 @@ export async function captureScreenshot(
  * privileged — that disables Chromium's sandbox, not ours.
  */
 function buildCaptureScript(request: ScreenshotRequest): string {
+	// Each step reports its own failure. Collapsing them into one `||` chain is
+	// what made a resolution problem look like an install problem.
 	const setup = [
 		`if [ ! -f ${BROWSER_MARKER} ]; then`,
-		`  npm i -g playwright@${PLAYWRIGHT_VERSION} >/dev/null 2>&1 || npm i playwright@${PLAYWRIGHT_VERSION} >/dev/null 2>&1;`,
-		`  npx --yes playwright@${PLAYWRIGHT_VERSION} install chromium >/dev/null 2>&1 && touch ${BROWSER_MARKER};`,
+		`  npm i -g playwright@${PLAYWRIGHT_VERSION} >/dev/null 2>&1 || { echo __FAILED__playwright-install; exit 1; }`,
+		`  npx --yes playwright@${PLAYWRIGHT_VERSION} install chromium >/dev/null 2>&1 || { echo __FAILED__chromium-download; exit 1; }`,
+		`  touch ${BROWSER_MARKER};`,
 		`fi`,
 	].join('\n');
 
@@ -140,7 +143,10 @@ const options = ${options};
 		`cat > /tmp/.agent-shot.cjs <<'AGENT_EOF'`,
 		runner,
 		`AGENT_EOF`,
-		`node /tmp/.agent-shot.cjs`,
+		// NODE_PATH is the whole trick: a script outside the global tree cannot
+		// `require` a globally installed package without it, so the install
+		// succeeds and the require fails, which reads as a failed install.
+		`NODE_PATH="$(npm root -g)" node /tmp/.agent-shot.cjs`,
 	].join('\n');
 }
 
@@ -189,8 +195,20 @@ function describeFailure(stdout: string, stderr: string): string {
 		return `The browser failed: ${reported}`;
 	}
 
-	if (/Cannot find module 'playwright'|playwright: not found/i.test(combined)) {
+	if (/__FAILED__playwright-install/.test(combined)) {
 		return 'Playwright could not be installed in this sandbox, so screenshots are unavailable here.';
+	}
+	if (/__FAILED__chromium-download/.test(combined)) {
+		// Confirmed against Daytona: npm reaches the registry, but the browser CDN
+		// resets the connection. Nothing runtime-side fixes that, so say what does.
+		return (
+			'Playwright installed, but Chromium could not be downloaded — this sandbox cannot ' +
+			'reach the browser CDN. Screenshots need a sandbox image with Chromium already in it ' +
+			'(set DAYTONA_SNAPSHOT to one). Everything else in the sandbox works.'
+		);
+	}
+	if (/Cannot find module 'playwright'/i.test(combined)) {
+		return 'Playwright is installed but Node could not load it — NODE_PATH is not resolving the global module directory.';
 	}
 	if (/Host system is missing dependencies|error while loading shared libraries/i.test(combined)) {
 		return (
