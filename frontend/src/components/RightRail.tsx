@@ -15,10 +15,12 @@ import type { BrainState } from "@/lib/useBrain";
 import type { RepoState } from "@/lib/useRepo";
 import type { ScheduleState } from "@/lib/useSchedules";
 import type { WorkspaceState } from "@/lib/useWorkspace";
+import type { SessionPreview } from "@/lib/types";
 import { ArchivePanel } from "@/components/archive/ArchivePanel";
 import { MemoryPanel } from "@/components/brain/MemoryPanel";
 import { SkillsPanel } from "@/components/brain/SkillsPanel";
 import { SchedulePanel } from "@/components/schedule/SchedulePanel";
+import { PreviewPanel } from "@/components/workspace/PreviewPanel";
 import { WorkspacePanel } from "@/components/workspace/WorkspacePanel";
 import {
   BookmarkIcon,
@@ -27,9 +29,10 @@ import {
   CloseIcon,
   FolderIcon,
   HistoryIcon,
+  TerminalIcon,
 } from "@/components/ui/icons";
 
-export type RailTab = "files" | "memory" | "skills" | "schedule" | "archive";
+export type RailTab = "files" | "preview" | "memory" | "skills" | "schedule" | "archive";
 
 const TABS: Array<{
   id: RailTab;
@@ -37,6 +40,7 @@ const TABS: Array<{
   icon: React.ComponentType<React.SVGProps<SVGSVGElement>>;
 }> = [
   { id: "files", label: "Files", icon: FolderIcon },
+  { id: "preview", label: "Preview", icon: TerminalIcon },
   { id: "memory", label: "Memory", icon: BrainIcon },
   { id: "skills", label: "Skills", icon: BookmarkIcon },
   { id: "schedule", label: "Agents", icon: ClockIcon },
@@ -53,9 +57,12 @@ export function RightRail({
   schedules,
   archive,
   repo,
+  preview,
   onTaskReady,
 }: {
   sessionId: string;
+  /** The port the sandbox is currently serving, if any. */
+  preview: SessionPreview | null;
   tab: RailTab;
   onTabChange: (tab: RailTab) => void;
   onClose?: () => void;
@@ -68,6 +75,8 @@ export function RightRail({
 }) {
   const counts: Record<RailTab, number> = {
     files: workspace.tree?.stats.fileCount ?? 0,
+    // The port, so the tab reads "Preview 8020" while something is serving.
+    preview: preview?.port ?? 0,
     memory: brain.memories.length,
     skills: brain.skills.length,
     schedule: schedules.schedules.filter((s) => s.status === "active").length,
@@ -125,6 +134,7 @@ export function RightRail({
             onTaskReady={onTaskReady}
           />
         ) : null}
+        {tab === "preview" ? <PreviewPanel preview={preview} /> : null}
         {tab === "memory" ? <MemoryPanel brain={brain} /> : null}
         {tab === "skills" ? <SkillsPanel brain={brain} /> : null}
         {tab === "schedule" ? <SchedulePanel schedules={schedules} /> : null}

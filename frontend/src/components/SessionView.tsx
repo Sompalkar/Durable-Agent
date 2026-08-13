@@ -198,6 +198,17 @@ export function SessionView({ sessionId }: { sessionId: string }) {
     }, [refreshWorkspace, refreshRepo]),
     onBrainChanged: useCallback(() => refreshBrain(), [refreshBrain]),
     onScheduleChanged: useCallback(() => refreshSchedules(), [refreshSchedules]),
+    // Held here rather than refetched: the panel should show the running app
+    // the moment the port binds, not after the turn settles.
+    onPreviewReady: useCallback(
+      (next: { port: number; url: string }) =>
+        setSession((current) =>
+          current
+            ? { ...current, preview: { ...next, expiresAt: Date.now() + 3_600_000 } }
+            : current,
+        ),
+      [],
+    ),
     onProposals: useCallback((next: Proposal[]) => setProposals(next), []),
     onPlan: useCallback((next: PlanStep[]) => setPlan(next), []),
   });
@@ -350,6 +361,7 @@ export function SessionView({ sessionId }: { sessionId: string }) {
           schedules={schedules}
           archive={archive}
           repo={repo}
+          preview={session?.preview ?? null}
           onTaskReady={prefill}
         />
       </div>

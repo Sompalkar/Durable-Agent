@@ -63,6 +63,13 @@ export interface SessionListItem {
   messageCount: number;
 }
 
+export interface SessionPreview {
+  port: number;
+  url: string;
+  /** Signed links are time-limited, so a stale one has to be refreshed. */
+  expiresAt: number;
+}
+
 export interface SessionUsage {
   inputTokens: number;
   outputTokens: number;
@@ -138,6 +145,8 @@ export interface SessionSummary extends SessionListItem {
    * "sandbox" keeps one alive between turns.
    */
   runtime: string;
+  /** The port the sandbox is currently serving, if any. */
+  preview: SessionPreview | null;
   /** Model and effort this session runs on. Changeable per session. */
   model: string;
   effort: string;
@@ -329,6 +338,8 @@ export type AgentEvent =
   | { type: "proposals"; proposals: Proposal[] }
   | { type: "plan"; plan: PlanStep[] }
   | { type: "command_output"; id: string; chunk: string }
+  /** Something in the sandbox is serving and can be opened in the browser. */
+  | { type: "preview_ready"; port: number; url: string }
   | { type: "turn_end"; stopReason: string | null; usage: TurnUsage }
   | { type: "error"; message: string };
 

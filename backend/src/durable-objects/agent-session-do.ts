@@ -28,6 +28,7 @@ import {
 } from '../agent/models';
 import { createSandbox } from '../agent/sandbox';
 import { DEFAULT_RUNTIME, isRuntime, keepsSandboxWarm, type Runtime } from '../agent/runtime';
+import type { SessionPreview } from '../types';
 import { SandboxWorkspace } from '../agent/workspace/sandbox-workspace';
 import type { CommandRecord, RepoContext, ToolContext } from '../agent/tool-runtime';
 import type {
@@ -52,6 +53,9 @@ import type { WorkspaceDO } from './workspace-do';
  * Tighter than personal recall: repo knowledge is only relevant while a repo is
  * attached, and it competes for the same context as the code itself.
  */
+/** Matches the signed link's lifetime, so a stored preview never outlives it. */
+const PREVIEW_TTL_MS = 3_600_000;
+
 const REPO_RECALL_LIMIT = 25;
 
 interface MessageRow extends Record<string, SqlStorageValue> {
@@ -321,7 +325,20 @@ export class AgentSessionDO extends DurableObject<Env> {
 			model: this.model(),
 			effort: this.effort(),
 			runtime: this.runtime(),
+			preview: this.preview(),
 		};
+	}
+
+	/** The last exposed port, dropped once its signed link has expired. */
+	private preview(): SessionPreview | null {
+		const raw = this.getMeta('preview');
+		if (!raw) return null;
+		try {
+			const stored = JSON.parse(raw) as SessionPreview;
+			return stored.expiresAt > Date.now() ? stored : null;
+		} catch {
+			return null;
+		}
 	}
 
 	/**
@@ -555,6 +572,23 @@ export class AgentSessionDO extends DurableObject<Env> {
 		const sessionId = this.getMeta('sessionId') ?? 'default';
 		const model = this.model();
 
+		// Wrapped so the object can keep the last preview link. Without this it
+		// would only exist in the stream, and reopening the session would lose the
+		// running app the user was looking at.
+		const observe = (event: AgentEvent) => {
+			if (event.type === 'preview_ready') {
+				this.setMeta(
+					'preview',
+					JSON.stringify({
+						port: event.port,
+						url: event.url,
+						expiresAt: Date.now() + PREVIEW_TTL_MS,
+					}),
+				);
+			}
+			emit(event);
+		};
+
 		this.appendMessage('user', userMessage);
 		this.appendTranscript('user', userMessage, undefined, trigger);
 		if (this.getMeta('title') === 'Untitled session') {
@@ -598,7 +632,7 @@ export class AgentSessionDO extends DurableObject<Env> {
 			// Seeded from storage so a follow-up turn can carry on from the plan
 			// the previous turn left behind rather than starting blank.
 			plan: this.getPlan(),
-			emit,
+			emit: observe,
 			workspace,
 			filesLiveInSandbox,
 			brain,
@@ -627,7 +661,7 @@ export class AgentSessionDO extends DurableObject<Env> {
 			repoMemories,
 			skills,
 			messages: this.loadContext(),
-			emit,
+			emit: observe,
 		});
 
 		for (const message of result.newMessages) {

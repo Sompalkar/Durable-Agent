@@ -463,6 +463,9 @@ const HANDLERS: Record<string, ToolHandler> = {
 		// Fetched here rather than left to a second tool call: a dev server the user
 		// cannot open is not much of a dev server.
 		const link = process.port ? await previewLink(sandbox, process.port) : null;
+		if (process.port && link) {
+			context.emit({ type: 'preview_ready', port: process.port, url: link });
+		}
 		const where = process.port
 			? `Listening on port ${process.port}.` +
 				(link
@@ -501,9 +504,14 @@ const HANDLERS: Record<string, ToolHandler> = {
 			);
 		}
 
+		// Emitted as well as returned: the UI opens it directly, so the user does
+		// not have to copy a link out of the reply.
+		context.emit({ type: 'preview_ready', port, url });
+
 		return ok(
 			`The app on port ${port} is available at ${url}\n\n` +
-				`Give this link to the user. It expires in ${PREVIEW_TTL_SECONDS / 3600} hour(s).`,
+				`The user can already see it — it is open in their Preview panel. ` +
+				`It expires in ${PREVIEW_TTL_SECONDS / 3600} hour(s).`,
 			`preview on :${port}`,
 		);
 	},

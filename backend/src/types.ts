@@ -90,9 +90,21 @@ export interface SessionSummary {
 	 * "sandbox" keeps one alive between turns. Changeable per session.
 	 */
 	runtime: string;
+	/**
+	 * The last port exposed from the sandbox, so reopening the session still
+	 * shows the running app instead of a link the user has to ask for again.
+	 */
+	preview: SessionPreview | null;
 	/** Model and effort this session runs on. Changeable per session. */
 	model: string;
 	effort: string;
+}
+
+export interface SessionPreview {
+	port: number;
+	url: string;
+	/** Links are signed and time-limited, so a stale one has to be refreshed. */
+	expiresAt: number;
 }
 
 export interface SessionUsage {
@@ -233,6 +245,8 @@ export type AgentEvent =
 	| { type: 'plan'; plan: PlanStep[] }
 	/** Output from a shell command, while it is still running. */
 	| { type: 'command_output'; id: string; chunk: string }
+	/** Something in the sandbox is serving, and can be opened from the browser. */
+	| { type: 'preview_ready'; port: number; url: string }
 	| { type: 'turn_end'; stopReason: string | null; usage: TurnUsage }
 	| { type: 'error'; message: string };
 

@@ -36,6 +36,8 @@ interface StreamCallbacks {
   onScheduleChanged: () => void;
   /** Follow-up actions the agent offered before finishing. */
   onProposals: (proposals: Proposal[]) => void;
+  /** A port in the sandbox started serving. */
+  onPreviewReady: (preview: { port: number; url: string }) => void;
   /** Fires mid-turn, each time the agent rewrites its checklist. */
   onPlan: (plan: PlanStep[]) => void;
 }
@@ -193,6 +195,10 @@ export function useAgentStream(
           summary: event.summary,
           durationMs: event.durationMs,
         }));
+        break;
+
+      case "preview_ready":
+        callbacksRef.current.onPreviewReady({ port: event.port, url: event.url });
         break;
 
       case "workspace_changed":
