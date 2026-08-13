@@ -97,7 +97,24 @@ export class DaytonaSandbox implements SandboxProvider {
 		this.sandboxId = config.sandboxId;
 	}
 
+	/**
+	 * Run a command, booting a replacement sandbox once if the stored one has
+	 * been reclaimed. A user whose container was idled out should see their
+	 * command run, not an error telling them to try again.
+	 */
 	async run(options: RunOptions): Promise<CommandResult> {
+		try {
+			return await this.runOnce(options);
+		} catch (error) {
+			if (!(error instanceof SandboxError) || !/reclaimed after being idle/.test(error.message)) {
+				throw error;
+			}
+			// `exec` has already forgotten the dead id, so this boots a fresh one.
+			return this.runOnce(options);
+		}
+	}
+
+	private async runOnce(options: RunOptions): Promise<CommandResult> {
 		const sandboxId = await this.ensureSandbox();
 
 		// Checkout first, and crucially *before* the change-detection clock starts.
@@ -328,6 +345,16 @@ export class DaytonaSandbox implements SandboxProvider {
 
 	// --------------------------------------------------------------- private
 
+	/**
+	 * True for the errors a stopped or deleted sandbox produces.
+	 *
+	 * A stored id outlives the container it names — the provider reaps an idle
+	 * sandbox, and the next turn is still holding its id. Treating that as a
+	 * fatal error strands the session permanently; the right answer is to notice
+	 * and boot a replacement.
+	 */
+	private static readonly GONE = /failed to resolve container IP|not found|sandbox.*(stopped|destroyed|archived)/i;
+
 	private async ensureSandbox(): Promise<string> {
 		if (this.sandboxId) return this.sandboxId;
 
@@ -377,9 +404,18 @@ export class DaytonaSandbox implements SandboxProvider {
 		);
 
 		if (!response.ok) {
-			throw new SandboxError(
-				`Sandbox command failed (${response.status}): ${await response.text()}`,
-			);
+			const detail = await response.text();
+			if (DaytonaSandbox.GONE.test(detail)) {
+				// Forget it so the next call boots a fresh one rather than retrying
+				// against a container that no longer exists.
+				this.sandboxId = undefined;
+				this.checkedOut = undefined;
+				throw new SandboxError(
+					'The sandbox for this session was reclaimed after being idle. ' +
+						'Run the command again and a fresh one will be started.',
+				);
+			}
+			throw new SandboxError(`Sandbox command failed (${response.status}): ${detail}`);
 		}
 
 		// Field names have varied across Daytona versions, so accept the
