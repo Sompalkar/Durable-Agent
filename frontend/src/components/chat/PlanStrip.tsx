@@ -43,8 +43,10 @@ export function PlanStrip({
   const complete = done === plan.length;
 
   return (
-    <div className="border-t border-line bg-panel">
-      <div className="mx-auto max-w-3xl px-4">
+    // A card on the canvas rather than a bar welded to the composer, so the
+    // plan reads as part of the conversation it belongs to.
+    <div className="shrink-0 bg-canvas px-3 pt-2 sm:px-4">
+      <div className="mx-auto max-w-3xl rounded-xl border border-line bg-panel px-3">
         <button
           onClick={() => setOverride(!open)}
           aria-expanded={open}

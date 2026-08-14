@@ -113,6 +113,33 @@ export interface CommandRecord {
   durationMs: number;
 }
 
+/**
+ * One frame from the interactive shell.
+ *
+ * Separate from `AgentEvent`: these come from a command the user typed, and
+ * nothing in the transcript should react to them.
+ */
+export type ShellEvent =
+  | { type: "output"; chunk: string }
+  | {
+      type: "exit";
+      exitCode: number;
+      durationMs: number;
+      /** Paths written back into the workspace, so the file tree can refresh. */
+      changedFiles: string[];
+    }
+  | { type: "error"; message: string };
+
+/** One finished command in the shell's scrollback. */
+export interface ShellEntry {
+  id: number;
+  command: string;
+  output: string;
+  /** Null while the command is still running. */
+  exitCode: number | null;
+  durationMs: number;
+}
+
 /** A pull request this session opened and is now watching. */
 export interface WatchedPullRequest {
   number: number;

@@ -14,15 +14,6 @@
  */
 @theme {
   /*
-   * Default palette = dark. Cool slate surfaces with an electric violet
-   * accent. Surfaces step up in lightness as they come forward; borders stay
-   * hairline until something genuinely needs an edge.
-   *
-   * The slate carries a slight blue cast rather than being neutral grey —
-   * enough that the violet reads as belonging to the palette instead of being
-   * dropped on top of it.
-   */
-  /*
    * Default palette = dark. Near-monochrome graphite.
    *
    * The restraint is the point. Colour is expensive: the more surfaces carry
@@ -30,14 +21,20 @@
    * the accent is spent only on the agent's own marks and small live state.
    * The primary action is not accent-coloured at all — it is maximum contrast
    * (see `ink` on `canvas`), which reads as more confident than any hue.
+   *
+   * Four surfaces, ordered back-to-front: `sidebar` sits behind everything,
+   * `canvas` is the reading surface, `panel` is chrome that frames it, and
+   * `raised` is anything that needs to look picked up off the page (inputs,
+   * cards, the active row). `hover` is only ever a transient state.
    */
-  --color-canvas: #0a0a0b;
-  --color-panel: #101012;
+  --color-canvas: #0c0c0e;
+  --color-sidebar: #08080a;
+  --color-panel: #0f0f11;
   --color-raised: #17171a;
-  --color-hover: #202024;
+  --color-hover: #1f1f23;
 
-  --color-line: #1e1e21;
-  --color-line-strong: #2e2e33;
+  --color-line: #1c1c1f;
+  --color-line-strong: #2c2c31;
 
   /* Three text levels. Anything below `faint` is unreadable — do not add one. */
   --color-ink: #f7f7f8;
@@ -61,25 +58,37 @@
   --font-mono: var(--font-geist-mono), ui-monospace, monospace;
 
   --radius-panel: 0.875rem;
+
+  /*
+   * Elevation. Two steps only: `soft` for things resting on the page (the
+   * composer, the active sidebar row) and `pop` for things that have genuinely
+   * left it (menus, drawers). A third step would be a third meaning nobody can
+   * name.
+   */
+  --shadow-soft: 0 1px 2px rgb(0 0 0 / 0.16), 0 4px 16px -8px rgb(0 0 0 / 0.24);
+  --shadow-pop: 0 8px 32px -8px rgb(0 0 0 / 0.5), 0 2px 8px -2px rgb(0 0 0 / 0.3);
 }
 
 /*
  * Light theme.
  *
- * Applied globally via data-theme on <html>. Cool white with the same faint
- * blue cast as the dark surfaces, so the two themes are recognisably one
- * palette. The violet is darkened to hold contrast on white — the dark theme's
- * accent would fail against these surfaces. Every Tailwind utility resolves to
- * var(--color-*), so overriding these flips the whole app.
+ * Applied globally via data-theme on <html>. Paper-white reading surface with
+ * the surrounding chrome a half-step down in warmth, so the conversation is
+ * the brightest thing on screen and the rails recede without needing borders
+ * to hold them apart. Every Tailwind utility resolves to var(--color-*), so
+ * overriding these flips the whole app.
  */
 [data-theme="light"] {
-  --color-canvas: #fbfbfa;
+  /* Canvas is a shade off pure white so that `panel` cards still read as
+     lifted off it without needing a heavy border. */
+  --color-canvas: #fcfcfb;
+  --color-sidebar: #f6f6f3;
   --color-panel: #ffffff;
-  --color-raised: #f4f4f3;
-  --color-hover: #eaeae8;
+  --color-raised: #f2f2ef;
+  --color-hover: #eaeae6;
 
-  --color-line: #e6e6e3;
-  --color-line-strong: #d0d0cc;
+  --color-line: #eaeae6;
+  --color-line-strong: #d6d6d0;
 
   --color-ink: #131314;
   --color-ink-soft: #57575c;
@@ -94,17 +103,22 @@
   --color-negative: #b4453a;
   --color-caution: #926510;
   --color-info: #35618f;
+
+  /* Shadows have to be much lighter on white or they read as smudges. */
+  --shadow-soft: 0 1px 2px rgb(16 16 20 / 0.05), 0 4px 14px -8px rgb(16 16 20 / 0.12);
+  --shadow-pop: 0 8px 32px -8px rgb(16 16 20 / 0.16), 0 2px 8px -2px rgb(16 16 20 / 0.08);
 }
 
 /* Explicit dark wrapper so a data-theme="dark" subtree stays dark even if a
    light ancestor exists. Values mirror the @theme defaults. */
 [data-theme="dark"] {
-  --color-canvas: #0a0a0b;
-  --color-panel: #101012;
+  --color-canvas: #0c0c0e;
+  --color-sidebar: #08080a;
+  --color-panel: #0f0f11;
   --color-raised: #17171a;
-  --color-hover: #202024;
-  --color-line: #1e1e21;
-  --color-line-strong: #2e2e33;
+  --color-hover: #1f1f23;
+  --color-line: #1c1c1f;
+  --color-line-strong: #2c2c31;
   --color-ink: #f7f7f8;
   --color-ink-soft: #a1a1a6;
   --color-ink-faint: #74747a;
@@ -116,6 +130,9 @@
   --color-negative: #d16a5e;
   --color-caution: #cf9a3c;
   --color-info: #6b93c4;
+
+  --shadow-soft: 0 1px 2px rgb(0 0 0 / 0.16), 0 4px 16px -8px rgb(0 0 0 / 0.24);
+  --shadow-pop: 0 8px 32px -8px rgb(0 0 0 / 0.5), 0 2px 8px -2px rgb(0 0 0 / 0.3);
 }
 
 /* Smooth the base surface when the theme flips. Interactive elements keep
@@ -126,6 +143,18 @@ body {
   transition:
     background-color 0.3s ease,
     color 0.3s ease;
+}
+
+/*
+ * Mobile browsers report `100%`/`100vh` as the height with the URL bar hidden,
+ * so a full-height app shell ends up taller than the visible viewport and the
+ * composer sits below the fold. `dvh` tracks the chrome as it collapses.
+ */
+@supports (height: 100dvh) {
+  html,
+  body {
+    height: 100dvh;
+  }
 }
 
 body {
@@ -155,14 +184,34 @@ body {
   background-color: var(--color-ink-faint);
 }
 
+/* For short horizontal strips (the rail's tab row) where a visible track would
+   be thicker than the thing it scrolls. */
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
 ::selection {
   background-color: var(--color-accent-dim);
   color: var(--color-ink);
 }
 
-:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 2px;
+/*
+ * Global keyboard focus ring.
+ *
+ * Declared inside `base` on purpose. Unlayered rules beat every layered one no
+ * matter how specific, so an unlayered `:focus-visible` here would silently win
+ * over `focus-visible:outline-none` at the call site — which is exactly what a
+ * control that draws its own focus state (the composer, whose card border
+ * carries it) needs to be able to ask for.
+ */
+@layer base {
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
 }
 
 /* Streaming caret shown at the end of in-flight assistant text. */

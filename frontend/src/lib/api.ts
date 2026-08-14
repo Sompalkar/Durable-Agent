@@ -515,4 +515,9 @@ export const api = {
   messagesUrl(id: string): string {
     return `${BASE_URL}/api/sessions/${id}/messages`;
   },
+
+  /** URL for the interactive shell, consumed by `useShell`. */
+  shellUrl(id: string): string {
+    return `${BASE_URL}/api/sessions/${id}/shell`;
+  },
 };

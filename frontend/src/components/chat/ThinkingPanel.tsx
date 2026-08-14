@@ -16,7 +16,7 @@ export function ThinkingPanel({ text }: { text: string }) {
   if (!text.trim()) return null;
 
   return (
-    <div className="animate-in overflow-hidden rounded-lg border border-line bg-panel/60">
+    <div className="animate-in overflow-hidden rounded-xl border border-line bg-panel">
       <button
         onClick={() => setExpanded((value) => !value)}
         className="flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-hover"

@@ -180,6 +180,50 @@ sessionRoutes.post('/:id/messages', async (c) => {
 	});
 });
 
+/**
+ * POST /api/sessions/:id/shell — run one command, stream its output back.
+ *
+ * The session object decides whether a shell is available at all (it depends on
+ * the runtime), so this route only checks the session exists and pipes the
+ * stream. Errors come back as JSON with a `code` the UI can act on rather than
+ * only a sentence it has to show verbatim.
+ */
+sessionRoutes.post('/:id/shell', async (c) => {
+	const user = c.get('user');
+	const id = c.req.param('id');
+	const body = await readJson<{ command?: string }>(c.req.raw);
+	if (typeof body.command !== 'string' || !body.command.trim()) {
+		throw ApiError.badRequest('"command" must be a non-empty string.');
+	}
+
+	const stub = sessionStub(c.env, user.id, id);
+	const summary = await stub.summary();
+	if (!summary.id) throw ApiError.notFound(`Session ${id} does not exist.`);
+
+	const response = await stub.fetch('http://session/shell', {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ command: body.command }),
+	});
+
+	// A refusal (wrong runtime, turn in flight) arrives as JSON, not a stream.
+	if (!response.ok || !response.body) {
+		return new Response(await response.text(), {
+			status: response.status,
+			headers: { 'Content-Type': 'application/json' },
+		});
+	}
+
+	return new Response(response.body, {
+		headers: {
+			'Content-Type': 'text/event-stream; charset=utf-8',
+			'Cache-Control': 'no-cache, no-transform',
+			Connection: 'keep-alive',
+			'X-Accel-Buffering': 'no',
+		},
+	});
+});
+
 /** DELETE /api/sessions/:id/messages — clear the conversation, keep the files. */
 sessionRoutes.delete('/:id/messages', async (c) => {
 	await sessionStub(c.env, c.get('user').id, c.req.param('id')).clearHistory();

@@ -55,7 +55,8 @@ export function ThemeToggle({
       aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
       title={theme === "dark" ? "Switch to light" : "Switch to dark"}
       className={classNames(
-        "inline-flex h-9 w-9 items-center justify-center rounded-lg border border-line text-ink-soft transition-colors hover:border-line-strong hover:text-ink",
+        // Ghost, to match the other icon buttons it sits beside in a header.
+        "inline-flex h-9 w-9 items-center justify-center rounded-lg text-ink-soft transition-colors hover:bg-hover hover:text-ink",
         className,
       )}
     >

@@ -54,7 +54,7 @@ export function SettingsView() {
 
   return (
     <div className="flex h-full min-w-0 flex-1 flex-col overflow-y-auto">
-      <header className="sticky top-0 z-10 flex items-center gap-2 border-b border-line bg-canvas/85 px-4 py-3 backdrop-blur">
+      <header className="sticky top-0 z-10 flex h-13 shrink-0 items-center gap-2 border-b border-line bg-canvas/85 px-3 backdrop-blur sm:px-4">
         <IconButton label="Toggle sessions" onClick={toggle} className="lg:hidden">
           <PanelIcon className="h-4 w-4" />
         </IconButton>
@@ -356,7 +356,7 @@ function Stat({
   accent?: boolean;
 }) {
   return (
-    <div className="rounded-lg border border-line bg-canvas px-3 py-2.5">
+    <div className="rounded-xl border border-line bg-raised px-3 py-2.5">
       <dt className="text-[11px] uppercase tracking-[0.08em] text-ink-faint">
         {label}
       </dt>
@@ -534,7 +534,7 @@ function TextInput({
       value={value}
       onChange={(event) => onChange(event.target.value)}
       className={classNames(
-        "block w-full rounded-lg border border-line bg-canvas px-3 py-2",
+        "block w-full rounded-lg border border-line bg-raised px-3 py-2",
         "text-[13px] text-ink placeholder:text-ink-faint outline-none transition-colors",
         "focus:border-accent focus:ring-2 focus:ring-accent/25",
       )}
@@ -556,7 +556,7 @@ function Select({
       value={value}
       onChange={(event) => onChange(event.target.value)}
       className={classNames(
-        "block w-full rounded-lg border border-line bg-canvas px-3 py-2",
+        "block w-full rounded-lg border border-line bg-raised px-3 py-2",
         "text-[13px] text-ink outline-none transition-colors",
         "focus:border-accent focus:ring-2 focus:ring-accent/25",
       )}

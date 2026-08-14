@@ -14,7 +14,7 @@ export function EmptyState({
   action?: React.ReactNode;
 }) {
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-3 px-8 py-12 text-center">
+    <div className="flex h-full flex-col items-center justify-center gap-3 px-4 py-12 text-center sm:px-8">
       {icon ? (
         <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-accent-dim text-accent">
           {icon}
@@ -26,7 +26,9 @@ export function EmptyState({
           {description}
         </p>
       ) : null}
-      {action ? <div className="pt-1">{action}</div> : null}
+      {/* Full width so an action can lay itself out in columns; the centred
+          text above keeps its own narrower measure. */}
+      {action ? <div className="w-full pt-1">{action}</div> : null}
     </div>
   );
 }

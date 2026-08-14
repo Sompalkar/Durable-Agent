@@ -105,9 +105,10 @@ export function ModelPicker({
         onClick={() => setOpen((value) => !value)}
         disabled={disabled}
         className={classNames(
-          "flex items-center gap-1.5 rounded-lg border border-line bg-raised px-2.5 py-1.5",
-          "text-[12px] font-medium text-ink transition-colors",
-          "hover:border-line-strong hover:bg-hover disabled:cursor-not-allowed disabled:opacity-50",
+          "flex h-9 items-center gap-1.5 rounded-full px-2.5",
+          "text-[12.5px] font-medium text-ink-soft transition-colors",
+          "hover:bg-hover hover:text-ink disabled:cursor-not-allowed disabled:opacity-50",
+          open && "bg-hover text-ink",
         )}
       >
         <span
@@ -118,18 +119,19 @@ export function ModelPicker({
             current?.tier === "most capable" ? "bg-accent" : "",
           )}
         />
-        {current?.label ?? model}
-        <span className="text-ink-faint">· {effort}</span>
+        <span className="max-w-[7.5rem] truncate">{current?.label ?? model}</span>
+        <span className="hidden text-ink-faint sm:inline">· {effort}</span>
         <ChevronIcon
           className={classNames(
-            "h-3 w-3 text-ink-faint transition-transform",
-            open && "rotate-90",
+            "h-3 w-3 shrink-0 text-ink-faint transition-transform",
+            open ? "-rotate-90" : "rotate-90",
           )}
         />
       </button>
 
       {open ? (
-        <div className="animate-in absolute right-0 z-50 mt-1.5 w-[19rem] overflow-hidden rounded-xl border border-line-strong bg-panel shadow-2xl shadow-black/40">
+        // Opens upward: the picker lives on the composer, at the bottom edge.
+        <div className="animate-in absolute bottom-full right-0 z-50 mb-2 max-h-[70vh] w-[19rem] max-w-[calc(100vw-2rem)] overflow-y-auto rounded-xl border border-line bg-panel shadow-pop">
           <div className="px-3 pb-1.5 pt-2.5">
             <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-faint">
               Model
@@ -190,7 +192,7 @@ export function ModelPicker({
                   className={classNames(
                     "flex-1 rounded-md px-1.5 py-1 text-[11px] font-medium capitalize transition-colors",
                     level === effort
-                      ? "bg-accent text-accent-ink"
+                      ? "bg-ink text-canvas"
                       : "bg-raised text-ink-soft hover:bg-hover hover:text-ink",
                   )}
                 >
@@ -217,7 +219,7 @@ export function ModelPicker({
                   className={classNames(
                     "flex-1 rounded-md px-1.5 py-1 text-[11px] font-medium transition-colors",
                     option.id === runtime
-                      ? "bg-accent text-accent-ink"
+                      ? "bg-ink text-canvas"
                       : "bg-raised text-ink-soft hover:bg-hover hover:text-ink",
                   )}
                 >

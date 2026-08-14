@@ -26,10 +26,11 @@ import {
 	isValidEffort,
 	isValidModel,
 } from '../agent/models';
-import { createSandbox } from '../agent/sandbox';
+import { createSandbox, type SandboxProvider } from '../agent/sandbox';
 import { DEFAULT_RUNTIME, isRuntime, keepsSandboxWarm, type Runtime } from '../agent/runtime';
-import type { SessionPreview } from '../types';
+import type { SessionPreview, ShellEvent } from '../types';
 import { SandboxWorkspace } from '../agent/workspace/sandbox-workspace';
+import { isAgentAuthored } from '../agent/tool-runtime';
 import type { CommandRecord, RepoContext, ToolContext } from '../agent/tool-runtime';
 import type {
 	AgentEvent,
@@ -57,6 +58,13 @@ import type { WorkspaceDO } from './workspace-do';
 const PREVIEW_TTL_MS = 3_600_000;
 
 const REPO_RECALL_LIMIT = 25;
+
+/**
+ * Ceiling for one hand-typed command.
+ * Longer than the agent's own, because a person watching output is willing to
+ * wait for an install in a way an autonomous loop should not be.
+ */
+const SHELL_TIMEOUT_SECONDS = 180;
 
 interface MessageRow extends Record<string, SqlStorageValue> {
 	id: number;
@@ -448,6 +456,9 @@ export class AgentSessionDO extends DurableObject<Env> {
 	 */
 	override async fetch(request: Request): Promise<Response> {
 		const url = new URL(request.url);
+		if (request.method === 'POST' && url.pathname === '/shell') {
+			return this.openShell(request);
+		}
 		if (request.method !== 'POST' || url.pathname !== '/run') {
 			return new Response('Not found', { status: 404 });
 		}
@@ -490,6 +501,154 @@ export class AgentSessionDO extends DurableObject<Env> {
 				Connection: 'keep-alive',
 			},
 		});
+	}
+
+	// ------------------------------------------------------- the user's shell
+
+	/**
+	 * `POST /shell` with `{ "command": "..." }` — run one command in this
+	 * session's container and stream its output back as SSE.
+	 *
+	 * Deliberately limited to the `sandbox` runtime. On `durable` the container
+	 * is destroyed at the end of every turn, so each command would open a fresh
+	 * empty machine: `cd` would not persist, an install would be thrown away,
+	 * and nothing typed would relate to anything typed before. A shell whose
+	 * state resets between lines is not a shell, so it is refused with a reason
+	 * rather than offered in a form that misleads.
+	 */
+	private async openShell(request: Request): Promise<Response> {
+		if (!keepsSandboxWarm(this.runtime())) {
+			return Response.json(
+				{
+					error:
+						'A shell needs a container that survives between commands. Switch this session to the "Always on" runtime to use one.',
+					code: 'runtime_unsupported',
+				},
+				{ status: 409 },
+			);
+		}
+
+		// One container, one command at a time. Letting a hand-typed command run
+		// underneath the agent would have them writing the same files from two
+		// directions, and the loser would be whichever wrote first.
+		if (this.running) {
+			return Response.json(
+				{
+					error: 'The agent is working in this session. Wait for the turn to finish.',
+					code: 'turn_running',
+				},
+				{ status: 409 },
+			);
+		}
+
+		const body = (await request.json()) as { command?: unknown };
+		const command = typeof body.command === 'string' ? body.command.trim() : '';
+		if (!command) {
+			return Response.json({ error: '"command" must be a non-empty string.' }, { status: 400 });
+		}
+
+		const sandbox = createSandbox(this.env, {
+			sessionId: this.getMeta('sessionId') ?? 'default',
+			sandboxId: this.getMeta('sandboxId') ?? undefined,
+			keepWarm: true,
+			onSandboxCreated: (id) => this.setMeta('sandboxId', id),
+		});
+		if (!sandbox) {
+			return Response.json(
+				{
+					error: 'No sandbox provider is configured on this deployment.',
+					code: 'no_sandbox',
+				},
+				{ status: 409 },
+			);
+		}
+
+		const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
+		this.ctx.waitUntil(this.streamShell(sandbox, command, writable));
+
+		return new Response(readable, {
+			headers: {
+				'Content-Type': 'text/event-stream; charset=utf-8',
+				'Cache-Control': 'no-cache, no-transform',
+				Connection: 'keep-alive',
+			},
+		});
+	}
+
+	/**
+	 * Run one shell command, streaming output as it arrives.
+	 *
+	 * Writes back anything the command changed, through the same filter the
+	 * agent's own `run_command` uses — otherwise the Files panel would quietly
+	 * disagree with the container the user is typing into.
+	 */
+	private async streamShell(
+		sandbox: SandboxProvider,
+		command: string,
+		writable: WritableStream<Uint8Array>,
+	): Promise<void> {
+		const writer = writable.getWriter();
+		const encoder = new TextEncoder();
+
+		// Serialised through one promise chain so chunks cannot interleave, the
+		// same shape the turn stream uses.
+		let flushing: Promise<void> = Promise.resolve();
+		const send = (event: ShellEvent) => {
+			flushing = flushing.then(async () => {
+				await writer.write(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+			});
+		};
+
+		// Whether the provider streamed. Not every one can, and the fallback below
+		// depends on knowing — emitting the buffered output unconditionally prints
+		// everything twice on a provider that did stream.
+		let streamed = false;
+
+		try {
+			const result = await sandbox.run({
+				command,
+				// Empty on purpose: on this runtime the container already holds the
+				// workspace, so pushing files would overwrite what the shell just did.
+				files: [],
+				timeoutSeconds: SHELL_TIMEOUT_SECONDS,
+				onOutput: (chunk) => {
+					streamed = true;
+					send({ type: 'output', chunk });
+				},
+			});
+
+			// Only for a provider that could not stream. Without this the command
+			// would appear to have produced no output at all.
+			if (!streamed) {
+				if (result.stdout) send({ type: 'output', chunk: result.stdout });
+				if (result.stderr) send({ type: 'output', chunk: result.stderr });
+			}
+
+			const authored = result.changedFiles.filter((file) => isAgentAuthored(file.path));
+			if (authored.length > 0) {
+				await this.workspaceStub().writeMany(
+					authored.map((file) => ({ path: file.path, content: file.content })),
+					`written by \`${command.slice(0, 40)}\``,
+				);
+				const changed = new Set(await this.changedPaths());
+				for (const file of authored) {
+					changed.add(file.path.startsWith('/') ? file.path : `/${file.path}`);
+				}
+				this.setMeta('changedPaths', JSON.stringify([...changed]));
+			}
+
+			send({
+				type: 'exit',
+				exitCode: result.exitCode,
+				durationMs: result.durationMs,
+				changedFiles: authored.map((file) => file.path),
+			});
+		} catch (error) {
+			send({ type: 'error', message: describeAgentError(error) });
+		} finally {
+			await flushing;
+			await writer.close().catch(() => {});
+		}
 	}
 
 	/**

@@ -11,7 +11,7 @@ export default function SessionsIndexPage() {
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <header className="flex items-center gap-2 border-b border-line bg-panel px-3 py-2">
+      <header className="flex h-13 shrink-0 items-center gap-1.5 border-b border-line bg-canvas px-2 sm:px-3">
         <button
           onClick={leftPanel.toggle}
           aria-label="Toggle sessions"
@@ -19,13 +19,13 @@ export default function SessionsIndexPage() {
         >
           <PanelIcon className="h-[18px] w-[18px]" />
         </button>
-        <span className="flex-1 truncate text-[15px] font-semibold tracking-tight">
+        <span className="flex-1 truncate text-[14px] font-semibold tracking-tight">
           Durable Agent
         </span>
         <ThemeToggle />
       </header>
 
-      <div className="flex flex-1 items-center justify-center">
+      <div className="flex min-h-0 flex-1 items-center justify-center bg-canvas">
         <EmptyState
           icon={<DatabaseIcon className="h-6 w-6" />}
           title="Pick a session, or start a new one"

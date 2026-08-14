@@ -792,8 +792,14 @@ const GENERATED_DIRECTORIES = new Set([
 	'.turbo', '.cache', 'coverage', 'target', '__pycache__', '.venv', 'vendor',
 ]);
 
-/** True when a path looks like something a person would want to review. */
-function isAgentAuthored(path: string): boolean {
+/**
+ * True when a path looks like something a person would want to review.
+ *
+ * Exported because the interactive shell writes files back through the same
+ * filter — a `npm install` typed by hand should no more flood the workspace
+ * with `node_modules` than one the agent ran.
+ */
+export function isAgentAuthored(path: string): boolean {
 	if (/\.(tsbuildinfo|log|map)$/.test(path)) return false;
 	return !path.split('/').some((segment) => GENERATED_DIRECTORIES.has(segment));
 }

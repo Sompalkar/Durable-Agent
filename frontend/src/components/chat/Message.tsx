@@ -13,7 +13,11 @@ import { Markdown } from "@/lib/markdown";
 export function UserMessage({ text }: { text: string }) {
   return (
     <div className="animate-in flex justify-end">
-      <div className="max-w-[85%] rounded-2xl rounded-br-md border border-line bg-raised px-4 py-2.5">
+      {/* The user's turn is the only thing in the column that gets a bubble.
+          The agent's replies are long and often contain code, so boxing them
+          too would leave the whole transcript looking like a chat app rather
+          than something you read. */}
+      <div className="max-w-[85%] rounded-2xl rounded-br-md bg-raised px-4 py-2.5">
         <p className="whitespace-pre-wrap text-[15px] leading-relaxed text-ink">
           {text}
         </p>
@@ -36,9 +40,7 @@ export function AssistantMessage({
     <div className="animate-in space-y-2">
       {children}
       {text || streaming ? (
-        <div className="max-w-[92%]">
-          <MessageBody text={text} streaming={streaming} />
-        </div>
+        <MessageBody text={text} streaming={streaming} />
       ) : null}
     </div>
   );
@@ -63,7 +65,7 @@ export function MessageBody({
           return (
             <figure
               key={index}
-              className="overflow-hidden rounded-lg border border-line bg-canvas"
+              className="overflow-hidden rounded-xl border border-line bg-raised"
             >
               {segment.language ? (
                 <figcaption className="border-b border-line px-3 py-1.5 font-mono text-[11px] uppercase tracking-wider text-ink-faint">

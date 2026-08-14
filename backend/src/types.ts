@@ -255,3 +255,21 @@ export interface TurnUsage {
 	outputTokens: number;
 	cacheReadTokens: number;
 }
+
+/**
+ * One frame from the interactive shell.
+ *
+ * Kept separate from `AgentEvent` rather than folded into it: these come from a
+ * command the *user* typed, not from a turn, and nothing in the transcript
+ * should react to them.
+ */
+export type ShellEvent =
+	| { type: 'output'; chunk: string }
+	| {
+			type: 'exit';
+			exitCode: number;
+			durationMs: number;
+			/** Paths written back into the workspace, so the file tree can refresh. */
+			changedFiles: string[];
+	  }
+	| { type: 'error'; message: string };
