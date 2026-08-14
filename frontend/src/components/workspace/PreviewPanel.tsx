@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * The running app, shown inside the app.
+ * The running app, shown inside the app — the "Browser" tab.
  *
  * The Daytona proxy sets no X-Frame-Options and no frame-ancestors, so the
  * sandbox can be embedded directly rather than only linked. Seeing the thing
@@ -13,9 +13,19 @@ import { useEffect, useState } from "react";
 import { classNames } from "@/lib/format";
 import type { SessionPreview } from "@/lib/types";
 import { EmptyState } from "@/components/ui/Feedback";
-import { TerminalIcon } from "@/components/ui/icons";
+import { BrowserIcon } from "@/components/ui/icons";
+import { EnablePersistentButton } from "./ShellPanel";
 
-export function PreviewPanel({ preview }: { preview: SessionPreview | null }) {
+export function PreviewPanel({
+  preview,
+  persistent,
+  onEnablePersistent,
+}: {
+  preview: SessionPreview | null;
+  /** Whether the session keeps a container between turns. */
+  persistent: boolean;
+  onEnablePersistent: () => Promise<void>;
+}) {
   // Bumping this remounts the iframe. Reloading it directly is not possible —
   // the frame is cross-origin, so its history and location are off limits.
   const [reloadKey, setReloadKey] = useState(0);
@@ -32,11 +42,20 @@ export function PreviewPanel({ preview }: { preview: SessionPreview | null }) {
   const expired = preview !== null && preview.expiresAt <= now;
 
   if (!preview) {
-    return (
+    // On the ephemeral runtime a dev server cannot survive the turn that
+    // started it, so the honest empty state is about the runtime, not the port.
+    return persistent ? (
       <EmptyState
-        icon={<TerminalIcon className="h-6 w-6" />}
+        icon={<BrowserIcon className="h-6 w-6" />}
         title="Nothing is running"
         description="Ask the agent to start a dev server. When it binds a port, the running app appears here."
+      />
+    ) : (
+      <EmptyState
+        icon={<BrowserIcon className="h-6 w-6" />}
+        title="No browser on this runtime"
+        description="A dev server needs a container that outlives the turn that started it. On demand destroys it as soon as the turn ends."
+        action={<EnablePersistentButton onEnable={onEnablePersistent} />}
       />
     );
   }

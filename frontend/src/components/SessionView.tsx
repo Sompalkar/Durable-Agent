@@ -147,6 +147,16 @@ export function SessionView({ sessionId }: { sessionId: string }) {
     [sessionId],
   );
 
+  /**
+   * Switch this session to the runtime that keeps a container alive.
+   *
+   * Offered from the shell and browser panels, which are the two places where
+   * the ephemeral runtime is what stopped you.
+   */
+  const enablePersistent = useCallback(async () => {
+    await configure({ runtime: "sandbox" });
+  }, [configure]);
+
   /** Refresh the header's usage counters once a turn settles. */
   const refreshSession = useCallback(async () => {
     try {
@@ -429,6 +439,8 @@ export function SessionView({ sessionId }: { sessionId: string }) {
           repo={repo}
           preview={session?.preview ?? null}
           shell={shell}
+          persistent={session?.runtime === "sandbox"}
+          onEnablePersistent={enablePersistent}
           onTaskReady={prefill}
         />
       </div>

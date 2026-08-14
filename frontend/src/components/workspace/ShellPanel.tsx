@@ -16,10 +16,17 @@ import { useEffect, useRef, useState } from "react";
 import { classNames, formatDuration } from "@/lib/format";
 import type { ShellState } from "@/lib/useShell";
 import { EmptyState } from "@/components/ui/Feedback";
-import { IconButton } from "@/components/ui/Button";
+import { Button, IconButton } from "@/components/ui/Button";
 import { ArrowUpIcon, StopIcon, TerminalIcon, TrashIcon } from "@/components/ui/icons";
 
-export function ShellPanel({ shell }: { shell: ShellState }) {
+export function ShellPanel({
+  shell,
+  onEnablePersistent,
+}: {
+  shell: ShellState;
+  /** Switches the session to the runtime that keeps a container alive. */
+  onEnablePersistent: () => Promise<void>;
+}) {
   const [value, setValue] = useState("");
   /** Index into past commands, counting back from the most recent. */
   const [historyStep, setHistoryStep] = useState(0);
@@ -32,11 +39,15 @@ export function ShellPanel({ shell }: { shell: ShellState }) {
   }, [shell.entries]);
 
   if (shell.unavailable) {
+    // The fix is one setting, so it is offered here rather than described.
+    // Telling someone which switch to flip and then not flipping it is the
+    // most annoying shape an error message can take.
     return (
       <EmptyState
         icon={<TerminalIcon className="h-6 w-6" />}
         title="No shell on this runtime"
         description={shell.unavailable}
+        action={<EnablePersistentButton onEnable={onEnablePersistent} />}
       />
     );
   }
@@ -170,6 +181,46 @@ export function ShellPanel({ shell }: { shell: ShellState }) {
           </button>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Switches the session to the persistent runtime.
+ *
+ * Shared by the shell and the browser, because both are unavailable for the
+ * same reason and the remedy is identical.
+ */
+export function EnablePersistentButton({
+  onEnable,
+}: {
+  onEnable: () => Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState<string | null>(null);
+
+  const enable = async () => {
+    setBusy(true);
+    setFailed(null);
+    try {
+      await onEnable();
+    } catch (cause) {
+      setFailed(cause instanceof Error ? cause.message : "Could not switch runtime.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-col items-center gap-2">
+      <Button variant="primary" size="sm" onClick={enable} disabled={busy}>
+        {busy ? "Switching…" : "Switch to Always on"}
+      </Button>
+      <p className="max-w-xs text-[11px] leading-relaxed text-ink-faint">
+        Keeps one container alive between turns. It costs while idle, so switch
+        back to On demand when you are done.
+      </p>
+      {failed ? <p className="text-[12px] text-negative">{failed}</p> : null}
     </div>
   );
 }

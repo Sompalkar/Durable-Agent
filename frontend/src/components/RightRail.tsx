@@ -39,7 +39,7 @@ import {
 export type RailTab =
   | "files"
   | "shell"
-  | "preview"
+  | "browser"
   | "memory"
   | "skills"
   | "schedule"
@@ -52,7 +52,7 @@ const TABS: Array<{
 }> = [
   { id: "files", label: "Files", icon: FolderIcon },
   { id: "shell", label: "Shell", icon: TerminalIcon },
-  { id: "preview", label: "Preview", icon: BrowserIcon },
+  { id: "browser", label: "Browser", icon: BrowserIcon },
   { id: "memory", label: "Memory", icon: BrainIcon },
   { id: "skills", label: "Skills", icon: BookmarkIcon },
   { id: "schedule", label: "Agents", icon: ClockIcon },
@@ -71,12 +71,17 @@ export function RightRail({
   repo,
   preview,
   shell,
+  persistent,
+  onEnablePersistent,
   onTaskReady,
 }: {
   sessionId: string;
   /** The port the sandbox is currently serving, if any. */
   preview: SessionPreview | null;
   shell: ShellState;
+  /** Whether the session keeps a container between turns. */
+  persistent: boolean;
+  onEnablePersistent: () => Promise<void>;
   tab: RailTab;
   onTabChange: (tab: RailTab) => void;
   onClose?: () => void;
@@ -91,8 +96,8 @@ export function RightRail({
     files: workspace.tree?.stats.fileCount ?? 0,
     // Commands run this session. Zero reads as "nothing typed yet".
     shell: shell.entries.length,
-    // The port, so the tab reads "Preview 8020" while something is serving.
-    preview: preview?.port ?? 0,
+    // The port, so the tab reads "Browser 8020" while something is serving.
+    browser: preview?.port ?? 0,
     memory: brain.memories.length,
     skills: brain.skills.length,
     schedule: schedules.schedules.filter((s) => s.status === "active").length,
@@ -169,8 +174,16 @@ export function RightRail({
             onTaskReady={onTaskReady}
           />
         ) : null}
-        {tab === "shell" ? <ShellPanel shell={shell} /> : null}
-        {tab === "preview" ? <PreviewPanel preview={preview} /> : null}
+        {tab === "shell" ? (
+          <ShellPanel shell={shell} onEnablePersistent={onEnablePersistent} />
+        ) : null}
+        {tab === "browser" ? (
+          <PreviewPanel
+            preview={preview}
+            persistent={persistent}
+            onEnablePersistent={onEnablePersistent}
+          />
+        ) : null}
         {tab === "memory" ? <MemoryPanel brain={brain} /> : null}
         {tab === "skills" ? <SkillsPanel brain={brain} /> : null}
         {tab === "schedule" ? <SchedulePanel schedules={schedules} /> : null}
