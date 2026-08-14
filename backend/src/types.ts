@@ -256,6 +256,25 @@ export interface TurnUsage {
 	cacheReadTokens: number;
 }
 
+/** A long-running process inside the container, as the UI sees it. */
+export interface SandboxProcess {
+	name: string;
+	command: string;
+	pid: number;
+	running: boolean;
+	/** The port it appears to be listening on, when one could be determined. */
+	port: number | null;
+}
+
+/** What the session's container is doing right now. */
+export interface SandboxStatus {
+	running: boolean;
+	/** Whether the runtime keeps it alive between turns. */
+	persistent: boolean;
+	startedAt: number | null;
+	processes: SandboxProcess[];
+}
+
 /**
  * One frame from the interactive shell.
  *

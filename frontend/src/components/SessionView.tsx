@@ -15,6 +15,7 @@ import type {
   ModelOption,
   PlanStep,
   Proposal,
+  SessionPreview,
   SessionSummary,
   ToolActivity,
   TranscriptMessage,
@@ -28,6 +29,7 @@ import { useSchedules } from "@/lib/useSchedules";
 import { useWorkspace } from "@/lib/useWorkspace";
 import { useResizable } from "@/lib/useResizable";
 import { useShell } from "@/lib/useShell";
+import { useSandbox } from "@/lib/useSandbox";
 import { ChatPanel } from "@/components/chat/ChatPanel";
 import { ModelPicker } from "@/components/chat/ModelPicker";
 import { RuntimeSwitch } from "@/components/chat/RuntimeSwitch";
@@ -88,6 +90,18 @@ export function SessionView({ sessionId }: { sessionId: string }) {
   const repo = useRepo(sessionId);
   // The user's own commands can write files, so the tree refreshes on the same
   // signal the agent's commands use.
+  // Polled only while a panel that shows it is open — a status read runs a
+  // command inside the container, and the container is billed while it lives.
+  const sandbox = useSandbox(
+    sessionId,
+    tab === "browser" || tab === "shell",
+    useCallback(
+      (preview: SessionPreview) =>
+        setSession((current) => (current ? { ...current, preview } : current)),
+      [],
+    ),
+  );
+
   const shell = useShell(sessionId, {
     runtime: session?.runtime,
     onWorkspaceChanged: workspace.refresh,
@@ -444,6 +458,7 @@ export function SessionView({ sessionId }: { sessionId: string }) {
           repo={repo}
           preview={session?.preview ?? null}
           shell={shell}
+          sandbox={sandbox}
           persistent={session?.runtime === "sandbox"}
           onEnablePersistent={enablePersistent}
           onTaskReady={prefill}

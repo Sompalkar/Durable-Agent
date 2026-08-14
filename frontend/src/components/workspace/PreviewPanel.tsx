@@ -15,15 +15,20 @@ import type { SessionPreview } from "@/lib/types";
 import { EmptyState } from "@/components/ui/Feedback";
 import { BrowserIcon } from "@/components/ui/icons";
 import { EnablePersistentButton } from "./ShellPanel";
+import { ContainerBar } from "./ContainerBar";
+import { PortList } from "./PortList";
+import type { SandboxState } from "@/lib/useSandbox";
 
 export function PreviewPanel({
   preview,
   persistent,
+  sandbox,
   onEnablePersistent,
 }: {
   preview: SessionPreview | null;
   /** Whether the session keeps a container between turns. */
   persistent: boolean;
+  sandbox: SandboxState;
   onEnablePersistent: () => Promise<void>;
 }) {
   // Bumping this remounts the iframe. Reloading it directly is not possible —
@@ -45,11 +50,21 @@ export function PreviewPanel({
     // On the ephemeral runtime a dev server cannot survive the turn that
     // started it, so the honest empty state is about the runtime, not the port.
     return persistent ? (
-      <EmptyState
-        icon={<BrowserIcon className="h-6 w-6" />}
-        title="Nothing is running"
-        description="Ask the agent to start a dev server. When it binds a port, the running app appears here."
-      />
+      <div className="flex h-full min-h-0 flex-col">
+        <ContainerBar sandbox={sandbox} />
+        <PortList
+          sandbox={sandbox}
+          activePort={null}
+          onOpen={(port) => void sandbox.openPort(port)}
+        />
+        <div className="min-h-0 flex-1">
+          <EmptyState
+            icon={<BrowserIcon className="h-6 w-6" />}
+            title="Nothing is running"
+            description="Ask the agent to start a dev server. When it binds a port, the running app appears here."
+          />
+        </div>
+      </div>
     ) : (
       <EmptyState
         icon={<BrowserIcon className="h-6 w-6" />}
@@ -61,8 +76,14 @@ export function PreviewPanel({
   }
 
   return (
-    <div className="flex h-full flex-col">
-      <div className="flex items-center gap-2 border-b border-line px-3 py-2">
+    <div className="flex h-full min-h-0 flex-col">
+      <ContainerBar sandbox={sandbox} />
+      <PortList
+        sandbox={sandbox}
+        activePort={preview.port}
+        onOpen={(port) => void sandbox.openPort(port)}
+      />
+      <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-2">
         <span
           className={classNames(
             "h-1.5 w-1.5 shrink-0 rounded-full",

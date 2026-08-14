@@ -130,6 +130,25 @@ export type ShellEvent =
     }
   | { type: "error"; message: string };
 
+/** A long-running process inside the container. */
+export interface SandboxProcess {
+  name: string;
+  command: string;
+  pid: number;
+  running: boolean;
+  /** The port it appears to be listening on, when one could be determined. */
+  port: number | null;
+}
+
+/** What the session's container is doing right now. */
+export interface SandboxStatus {
+  running: boolean;
+  /** Whether the runtime keeps it alive between turns. */
+  persistent: boolean;
+  startedAt: number | null;
+  processes: SandboxProcess[];
+}
+
 /** One finished command in the shell's scrollback. */
 export interface ShellEntry {
   id: number;

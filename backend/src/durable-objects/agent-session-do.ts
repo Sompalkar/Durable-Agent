@@ -28,9 +28,10 @@ import {
 } from '../agent/models';
 import { createSandbox, type SandboxProvider } from '../agent/sandbox';
 import { DEFAULT_RUNTIME, isRuntime, keepsSandboxWarm, type Runtime } from '../agent/runtime';
-import type { SessionPreview, ShellEvent } from '../types';
+import type { SandboxStatus, SessionPreview, ShellEvent } from '../types';
 import { SandboxWorkspace } from '../agent/workspace/sandbox-workspace';
 import { isAgentAuthored } from '../agent/tool-runtime';
+import { listProcesses, stopProcess } from '../agent/processes';
 import type { CommandRecord, RepoContext, ToolContext } from '../agent/tool-runtime';
 import type {
 	AgentEvent,
@@ -503,6 +504,110 @@ export class AgentSessionDO extends DurableObject<Env> {
 		});
 	}
 
+	// ---------------------------------------------------- the user's container
+
+	/**
+	 * What the session's container is doing right now.
+	 *
+	 * Read from the container rather than from storage. A process list is only
+	 * true of the machine running it, and a cached copy would confidently
+	 * describe servers that died with a container an hour ago.
+	 *
+	 * `running: false` with no work done is the common case and costs nothing:
+	 * absent a stored `sandboxId` there is no container, so there is nothing to
+	 * ask and no provider to wake by asking.
+	 */
+	async sandboxStatus(): Promise<SandboxStatus> {
+		const sandboxId = this.getMeta('sandboxId');
+		const persistent = keepsSandboxWarm(this.runtime());
+
+		if (!sandboxId) {
+			return { running: false, persistent, startedAt: null, processes: [] };
+		}
+
+		const startedAt = Number(this.getMeta('sandboxStartedAt') ?? 0) || null;
+		const sandbox = createSandbox(this.env, {
+			sessionId: this.getMeta('sessionId') ?? 'default',
+			sandboxId,
+			keepWarm: persistent,
+		});
+		if (!sandbox) return { running: false, persistent, startedAt, processes: [] };
+
+		try {
+			const processes = await listProcesses(sandbox, null);
+			return { running: true, persistent, startedAt, processes };
+		} catch {
+			// The provider reaped it, or it never came back. Either way the id is
+			// stale, and keeping it would make every later call fail the same way.
+			this.ctx.storage.sql.exec("DELETE FROM meta WHERE key = 'sandboxId'");
+			return { running: false, persistent, startedAt: null, processes: [] };
+		}
+	}
+
+	/**
+	 * Destroy the container now, without changing the runtime.
+	 *
+	 * The point of an always-on container is that it survives; the cost of one
+	 * is that it survives. This is the release valve — stop paying without
+	 * losing the session, which stays exactly where it was because the files and
+	 * the conversation were never in the container to begin with.
+	 */
+	async stopSandbox(): Promise<{ stopped: boolean }> {
+		const sandboxId = this.getMeta('sandboxId');
+		if (!sandboxId) return { stopped: false };
+
+		const sandbox = createSandbox(this.env, {
+			sessionId: this.getMeta('sessionId') ?? 'default',
+			sandboxId,
+			keepWarm: false,
+		});
+		await sandbox?.dispose().catch(() => {});
+		this.ctx.storage.sql.exec("DELETE FROM meta WHERE key IN ('sandboxId', 'sandboxStartedAt')");
+		// The preview pointed into the container that just went away.
+		this.ctx.storage.sql.exec("DELETE FROM meta WHERE key = 'preview'");
+		return { stopped: true };
+	}
+
+	/** Stop one background process, leaving the container up. */
+	async stopSandboxProcess(name: string): Promise<{ stopped: boolean }> {
+		const sandboxId = this.getMeta('sandboxId');
+		if (!sandboxId) return { stopped: false };
+
+		const sandbox = createSandbox(this.env, {
+			sessionId: this.getMeta('sessionId') ?? 'default',
+			sandboxId,
+			keepWarm: keepsSandboxWarm(this.runtime()),
+		});
+		if (!sandbox) return { stopped: false };
+		return { stopped: await stopProcess(sandbox, null, name).catch(() => false) };
+	}
+
+	/**
+	 * A fresh public link for a port inside the container.
+	 *
+	 * Per port rather than one per session: an app is usually a frontend and an
+	 * API, and being able to see only one of them is the wrong half as often as
+	 * not. Links are signed and expire, so this also serves as the refresh.
+	 */
+	async sandboxPreview(port: number): Promise<SessionPreview | null> {
+		const sandboxId = this.getMeta('sandboxId');
+		if (!sandboxId) return null;
+
+		const sandbox = createSandbox(this.env, {
+			sessionId: this.getMeta('sessionId') ?? 'default',
+			sandboxId,
+			keepWarm: keepsSandboxWarm(this.runtime()),
+		});
+		if (!sandbox?.previewUrl) return null;
+
+		const url = await sandbox.previewUrl(port, PREVIEW_TTL_MS / 1000).catch(() => null);
+		if (!url) return null;
+
+		const preview: SessionPreview = { port, url, expiresAt: Date.now() + PREVIEW_TTL_MS };
+		this.setMeta('preview', JSON.stringify(preview));
+		return preview;
+	}
+
 	// ------------------------------------------------------- the user's shell
 
 	/**
@@ -551,7 +656,10 @@ export class AgentSessionDO extends DurableObject<Env> {
 			sessionId: this.getMeta('sessionId') ?? 'default',
 			sandboxId: this.getMeta('sandboxId') ?? undefined,
 			keepWarm: true,
-			onSandboxCreated: (id) => this.setMeta('sandboxId', id),
+			onSandboxCreated: (id) => {
+				this.setMeta('sandboxId', id);
+				this.setMeta('sandboxStartedAt', String(Date.now()));
+			},
 		});
 		if (!sandbox) {
 			return Response.json(
@@ -780,7 +888,10 @@ export class AgentSessionDO extends DurableObject<Env> {
 			sessionId,
 			sandboxId: this.getMeta('sandboxId') ?? undefined,
 			keepWarm: keepsSandboxWarm(this.runtime()),
-			onSandboxCreated: (id) => this.setMeta('sandboxId', id),
+			onSandboxCreated: (id) => {
+				this.setMeta('sandboxId', id);
+				this.setMeta('sandboxStartedAt', String(Date.now()));
+			},
 		});
 
 		// On the sandbox runtime the container holds the files and the object keeps

@@ -36,7 +36,9 @@ import type {
   Schedule,
   ScheduleActivity,
   ScheduledRun,
+  SandboxStatus,
   SessionListItem,
+  SessionPreview,
   SessionSummary,
   Skill,
   TranscriptMessage,
@@ -509,6 +511,29 @@ export const api = {
   /** Fire a schedule immediately rather than waiting for its alarm. */
   runScheduleNow(id: number): Promise<{ run: ScheduledRun }> {
     return request(`/api/schedules/${id}/run`, { method: "POST" });
+  },
+
+  // --------------------------------------------------------------- sandbox
+
+  sandboxStatus(id: string): Promise<SandboxStatus> {
+    return request(`/api/sessions/${id}/sandbox`);
+  },
+
+  stopSandbox(id: string): Promise<{ stopped: boolean }> {
+    return request(`/api/sessions/${id}/sandbox`, { method: "DELETE" });
+  },
+
+  stopSandboxProcess(id: string, name: string): Promise<{ stopped: boolean }> {
+    return request(`/api/sessions/${id}/sandbox/processes/${encodeURIComponent(name)}`, {
+      method: "DELETE",
+    });
+  },
+
+  sandboxPreview(id: string, port: number): Promise<{ preview: SessionPreview }> {
+    return request(`/api/sessions/${id}/sandbox/preview`, {
+      method: "POST",
+      body: JSON.stringify({ port }),
+    });
   },
 
   /** URL for the streaming turn endpoint, consumed by `useAgentStream`. */

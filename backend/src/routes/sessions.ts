@@ -180,6 +180,40 @@ sessionRoutes.post('/:id/messages', async (c) => {
 	});
 });
 
+/** GET /api/sessions/:id/sandbox — is a container up, and what is it running? */
+sessionRoutes.get('/:id/sandbox', async (c) => {
+	const stub = sessionStub(c.env, c.get('user').id, c.req.param('id'));
+	return c.json(await stub.sandboxStatus());
+});
+
+/** DELETE /api/sessions/:id/sandbox — destroy the container, keep the session. */
+sessionRoutes.delete('/:id/sandbox', async (c) => {
+	const stub = sessionStub(c.env, c.get('user').id, c.req.param('id'));
+	return c.json(await stub.stopSandbox());
+});
+
+/** DELETE /api/sessions/:id/sandbox/processes/:name — stop one dev server. */
+sessionRoutes.delete('/:id/sandbox/processes/:name', async (c) => {
+	const stub = sessionStub(c.env, c.get('user').id, c.req.param('id'));
+	return c.json(await stub.stopSandboxProcess(c.req.param('name')));
+});
+
+/** POST /api/sessions/:id/sandbox/preview — a fresh link for one port. */
+sessionRoutes.post('/:id/sandbox/preview', async (c) => {
+	const body = await readJson<{ port?: number }>(c.req.raw);
+	const port = Number(body.port);
+	if (!Number.isInteger(port) || port < 1 || port > 65535) {
+		throw ApiError.badRequest('"port" must be a valid port number.');
+	}
+
+	const stub = sessionStub(c.env, c.get('user').id, c.req.param('id'));
+	const preview = await stub.sandboxPreview(port);
+	if (!preview) {
+		throw new ApiError(409, 'No container is running, or it cannot expose a port.');
+	}
+	return c.json({ preview });
+});
+
 /**
  * POST /api/sessions/:id/shell — run one command, stream its output back.
  *

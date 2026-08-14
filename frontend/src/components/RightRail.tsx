@@ -3,11 +3,14 @@
 /**
  * The right rail: everything the agent has that is not the conversation.
  *
- * Seven tabs. Most read Durable Objects — files and revisions for this session,
- * memory and skills shared across all of them, and the alarms that run the
- * agent when nobody is watching. Archive reads MongoDB, and is the only one
- * whose contents outlive the session. Shell and Preview are the exceptions:
- * both address the container itself, and both are empty without one.
+ * Eight tabs, in the order work moves through them: what the agent has (Files),
+ * what it changed (Review), the machine it changed it on (Shell, Browser), what
+ * it remembers (Memory, Skills), what runs unattended (Agents), and what
+ * outlives the session (Archive).
+ *
+ * Most read Durable Objects. Archive reads MongoDB. Shell and Browser are the
+ * exceptions: both address the container itself, and both are empty without
+ * one — which is a property of the session's runtime, not a failure.
  */
 
 import { classNames } from "@/lib/format";
@@ -18,6 +21,7 @@ import type { ScheduleState } from "@/lib/useSchedules";
 import type { WorkspaceState } from "@/lib/useWorkspace";
 import type { SessionPreview } from "@/lib/types";
 import type { ShellState } from "@/lib/useShell";
+import type { SandboxState } from "@/lib/useSandbox";
 import { ArchivePanel } from "@/components/archive/ArchivePanel";
 import { MemoryPanel } from "@/components/brain/MemoryPanel";
 import { SkillsPanel } from "@/components/brain/SkillsPanel";
@@ -75,6 +79,7 @@ export function RightRail({
   repo,
   preview,
   shell,
+  sandbox,
   persistent,
   onEnablePersistent,
   onTaskReady,
@@ -83,6 +88,7 @@ export function RightRail({
   /** The port the sandbox is currently serving, if any. */
   preview: SessionPreview | null;
   shell: ShellState;
+  sandbox: SandboxState;
   /** Whether the session keeps a container between turns. */
   persistent: boolean;
   onEnablePersistent: () => Promise<void>;
@@ -113,7 +119,7 @@ export function RightRail({
   return (
     <aside className="flex h-full min-h-0 w-full shrink-0 flex-col border-line bg-panel xl:border-l">
       {/*
-        Seven labelled tabs need far more width than the rail has, so giving
+        Eight labelled tabs need far more width than the rail has, so giving
         each an equal share truncates every label and letting the row scroll
         hides whichever tab is last. Only the selected tab is labelled instead:
         the one you need named is the one you are looking at, and the rest stay
@@ -188,6 +194,7 @@ export function RightRail({
           <PreviewPanel
             preview={preview}
             persistent={persistent}
+            sandbox={sandbox}
             onEnablePersistent={onEnablePersistent}
           />
         ) : null}
