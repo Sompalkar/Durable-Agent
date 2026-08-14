@@ -125,8 +125,34 @@ export async function listProcesses(
 		`  pid=$(cat "$d/pid" 2>/dev/null);`,
 		`  cmd=$(cat "$d/cmd" 2>/dev/null);`,
 		`  if kill -0 "$pid" 2>/dev/null; then alive=1; else alive=0; fi;`,
-		// From the log, not `ss`/`lsof`: neither is guaranteed to be installed.
-		`  port=$(grep -oE 'https?://[^ ]*:[0-9]+|:[0-9]{4,5}' "$d/log" 2>/dev/null | grep -oE '[0-9]{4,5}' | head -1);`,
+		// Ask the kernel first, and only fall back to the log.
+		//
+		// The log alone is not enough: a server announces its port once, at
+		// startup, and that line is gone as soon as the log is rotated or
+		// truncated — after which a perfectly healthy dev server reports no port
+		// and cannot be opened from the UI. `/proc/net/tcp` is always present on
+		// Linux and needs no extra binary, so the socket is asked directly and
+		// matched to this process by the inodes it holds open.
+		//
+		// Ports are hex in `/proc/net/tcp`; `0A` is LISTEN. The hex is converted
+		// by the shell rather than by awk, because `strtonum` is a GNU extension
+		// and the awk in a typical container image is mawk, which does not have
+		// it — it fails at parse time and silently yields no port at all.
+		`  hexport=$(`,
+		`    inodes=$(ls -l /proc/"$pid"/fd 2>/dev/null | grep -oE 'socket:\\[[0-9]+\\]' | grep -oE '[0-9]+');`,
+		`    if [ -n "$inodes" ]; then`,
+		`      awk -v ino=" $(echo "$inodes" | tr '\\n' ' ') " '`,
+		`        NR>1 && $4=="0A" {`,
+		`          split($2, a, ":");`,
+		`          if (index(ino, " " $10 " ")) { print a[2]; exit }`,
+		`        }' /proc/net/tcp 2>/dev/null;`,
+		`    fi`,
+		`  );`,
+		`  port="";`,
+		`  if [ -n "$hexport" ]; then port=$(printf '%d' "0x$hexport" 2>/dev/null); fi;`,
+		`  if [ -z "$port" ]; then`,
+		`    port=$(grep -oE 'https?://[^ ]*:[0-9]+|:[0-9]{4,5}' "$d/log" 2>/dev/null | grep -oE '[0-9]{4,5}' | head -1);`,
+		`  fi;`,
 		`  printf '%s\\t%s\\t%s\\t%s\\n' "$(basename "$d")" "$pid" "$alive" "$port";`,
 		`  printf '__CMD__%s\\n' "$cmd";`,
 		`done`,
