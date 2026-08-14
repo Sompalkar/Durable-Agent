@@ -61,6 +61,61 @@ export class SandboxWorkspace implements AgentWorkspace {
 		private readonly repo: { cloneUrl: string; branch: string; commitSha: string } | null,
 	) {}
 
+	// ------------------------------------------------------------ hydration
+
+	/**
+	 * Copy the object's files into an empty container.
+	 *
+	 * Needed because the two runtimes keep the working copy in different places.
+	 * A session that has been running on `durable` has its files in SQLite and
+	 * nowhere else, so the first container it is given is empty — `ls` returns
+	 * nothing and the agent concludes the workspace was wiped.
+	 *
+	 * Only for a container that has no checkout of its own. With a repository
+	 * attached the clone is the source of truth and copying over it would
+	 * resurrect files a `git checkout` had deliberately discarded.
+	 *
+	 * Returns how many files were copied; zero means the container already had
+	 * content and was left alone.
+	 */
+	async hydrateFrom(): Promise<number> {
+		if (this.repo) return 0;
+
+		const existing = await this.exec(
+			`find . ${pruneExpression()} -type f -print -quit 2>/dev/null | head -1`,
+		);
+		if (existing.trim()) return 0;
+
+		const stored = await this.durable.list();
+		if (stored.length === 0) return 0;
+
+		// Read through the object, not through `this`: `this.read` goes to the
+		// container, which is exactly the thing that does not have the file yet.
+		const files = await Promise.all(
+			stored.map(async (record) => ({
+				path: record.path,
+				content: (await this.durable.read(record.path)).content,
+			})),
+		);
+
+		const script: string[] = [];
+		for (const file of files) {
+			if (byteLength(file.content) > MAX_FILE_BYTES) continue;
+			const relative = relativeOf(file.path);
+			const directory = relative.includes('/')
+				? relative.slice(0, relative.lastIndexOf('/'))
+				: '';
+			if (directory) script.push(`mkdir -p ${quote(directory)}`);
+			script.push(
+				`printf '%s' ${quote(encodeBase64(file.content))} | base64 -d > ${quote(relative)}`,
+			);
+		}
+
+		if (script.length === 0) return 0;
+		await this.exec(script.join(' && '));
+		return files.length;
+	}
+
 	// ---------------------------------------------------------------- reads
 
 	async list(directory?: string): Promise<FileRecord[]> {

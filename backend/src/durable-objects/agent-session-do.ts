@@ -605,6 +605,14 @@ export class AgentSessionDO extends DurableObject<Env> {
 		let streamed = false;
 
 		try {
+			// Same reason as a turn: the first container a session is given has
+			// none of its files. `null` for the repository because the shell does
+			// no checkout — hydration is skipped anyway once the container has
+			// content of its own.
+			await new SandboxWorkspace(sandbox, this.workspaceStub(), null)
+				.hydrateFrom()
+				.catch(() => 0);
+
 			const result = await sandbox.run({
 				command,
 				// Empty on purpose: on this runtime the container already holds the
@@ -784,6 +792,13 @@ export class AgentSessionDO extends DurableObject<Env> {
 			filesLiveInSandbox && sandbox
 				? new SandboxWorkspace(sandbox, durableWorkspace, repo?.checkout ?? null)
 				: durableWorkspace;
+
+		// A container this session has not used before starts empty, but the
+		// object may hold a workspace built up on the other runtime. Copy it
+		// across before the agent looks, or it concludes the files are gone.
+		if (workspace instanceof SandboxWorkspace) {
+			await workspace.hydrateFrom().catch(() => 0);
+		}
 
 		const context: ToolContext = {
 			sessionId,

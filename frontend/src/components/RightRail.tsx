@@ -23,6 +23,7 @@ import { MemoryPanel } from "@/components/brain/MemoryPanel";
 import { SkillsPanel } from "@/components/brain/SkillsPanel";
 import { SchedulePanel } from "@/components/schedule/SchedulePanel";
 import { PreviewPanel } from "@/components/workspace/PreviewPanel";
+import { ReviewPanel } from "@/components/workspace/ReviewPanel";
 import { ShellPanel } from "@/components/workspace/ShellPanel";
 import { WorkspacePanel } from "@/components/workspace/WorkspacePanel";
 import {
@@ -32,12 +33,14 @@ import {
   ClockIcon,
   CloseIcon,
   FolderIcon,
+  GitBranchIcon,
   HistoryIcon,
   TerminalIcon,
 } from "@/components/ui/icons";
 
 export type RailTab =
   | "files"
+  | "review"
   | "shell"
   | "browser"
   | "memory"
@@ -51,6 +54,7 @@ const TABS: Array<{
   icon: React.ComponentType<React.SVGProps<SVGSVGElement>>;
 }> = [
   { id: "files", label: "Files", icon: FolderIcon },
+  { id: "review", label: "Review", icon: GitBranchIcon },
   { id: "shell", label: "Shell", icon: TerminalIcon },
   { id: "browser", label: "Browser", icon: BrowserIcon },
   { id: "memory", label: "Memory", icon: BrainIcon },
@@ -94,6 +98,8 @@ export function RightRail({
 }) {
   const counts: Record<RailTab, number> = {
     files: workspace.tree?.stats.fileCount ?? 0,
+    // Files this session has changed — the size of the review waiting for you.
+    review: repo.changedPaths.length,
     // Commands run this session. Zero reads as "nothing typed yet".
     shell: shell.entries.length,
     // The port, so the tab reads "Browser 8020" while something is serving.
@@ -174,6 +180,7 @@ export function RightRail({
             onTaskReady={onTaskReady}
           />
         ) : null}
+        {tab === "review" ? <ReviewPanel sessionId={sessionId} repo={repo} /> : null}
         {tab === "shell" ? (
           <ShellPanel shell={shell} onEnablePersistent={onEnablePersistent} />
         ) : null}

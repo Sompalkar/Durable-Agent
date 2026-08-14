@@ -177,6 +177,23 @@ export const BrowserIcon = (props: IconProps) => (
   </Icon>
 );
 
+export const ServerIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <rect x="3" y="4" width="18" height="7" rx="2" />
+    <rect x="3" y="13" width="18" height="7" rx="2" />
+    <path d="M7 7.5h.01M7 16.5h.01" />
+  </Icon>
+);
+
+export const GitBranchIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <circle cx="6" cy="6" r="2.5" />
+    <circle cx="6" cy="18" r="2.5" />
+    <circle cx="18" cy="9" r="2.5" />
+    <path d="M6 8.5v7M18 11.5c0 3-3 4-6 4.5" />
+  </Icon>
+);
+
 export const SearchIcon = (props: IconProps) => (
   <Icon {...props}>
     <circle cx="11" cy="11" r="6.5" />

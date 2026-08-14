@@ -30,6 +30,7 @@ import { useResizable } from "@/lib/useResizable";
 import { useShell } from "@/lib/useShell";
 import { ChatPanel } from "@/components/chat/ChatPanel";
 import { ModelPicker } from "@/components/chat/ModelPicker";
+import { RuntimeSwitch } from "@/components/chat/RuntimeSwitch";
 import { UsageMeter } from "@/components/chat/UsageMeter";
 import { BackgroundActivity } from "@/components/BackgroundActivity";
 import { RightRail, type RailTab } from "@/components/RightRail";
@@ -334,6 +335,11 @@ export function SessionView({ sessionId }: { sessionId: string }) {
             <div className="hidden xl:block">
               <UsageMeter session={session} />
             </div>
+            <RuntimeSwitch
+              runtime={session.runtime}
+              disabled={stream.streaming}
+              onChange={(runtime) => configure({ runtime })}
+            />
             <button
               onClick={toggleRail}
               aria-label="Toggle agent panel"
@@ -371,7 +377,6 @@ export function SessionView({ sessionId }: { sessionId: string }) {
               <ModelPicker
                 models={models}
                 efforts={efforts}
-                runtime={session.runtime}
                 model={session.model}
                 effort={session.effort}
                 disabled={stream.streaming}
