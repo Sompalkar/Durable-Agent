@@ -336,12 +336,17 @@ export function SessionView({ sessionId }: { sessionId: string }) {
               {session.title}
             </h2>
             {/* The Durable Object id, as a chip. It is the thing you quote when
-                something goes wrong, so it stays visible where there is room. */}
+                something goes wrong, so it stays visible where there is room.
+
+                Only the leading segment: a full UUID is 36 characters, and at
+                `shrink-0` it collided with the usage meter and overprinted the
+                title. The prefix is enough to identify a session, and the whole
+                id is on the tooltip and one click away in the URL. */}
             <code
               title={`Durable Object ${session.id}`}
-              className="hidden shrink-0 rounded-md border border-line bg-raised px-1.5 py-0.5 font-mono text-[11px] leading-none text-ink-faint 2xl:inline-block"
+              className="hidden min-w-0 shrink truncate rounded-md border border-line bg-raised px-1.5 py-0.5 font-mono text-[11px] leading-none text-ink-faint 2xl:inline-block"
             >
-              {session.id}
+              {session.id.slice(0, 8)}
             </code>
           </div>
 

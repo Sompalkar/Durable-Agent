@@ -97,6 +97,15 @@ export function useShell(
       const trimmed = command.trim();
       if (!trimmed || running) return;
 
+      // Handled here rather than in the container: `clear` is about this
+      // scrollback, and a real one would only wipe a screen the container does
+      // not have. Sending it would cost a round trip to accomplish nothing.
+      if (trimmed === "clear") {
+        setEntries([]);
+        setError(null);
+        return;
+      }
+
       const controller = new AbortController();
       abortRef.current = controller;
       setRunning(true);
@@ -127,10 +136,15 @@ export function useShell(
               : {}),
           },
           credentials: "include",
-          // `cd` into the tracked directory first, run the command in a group so
-          // its exit code is the one reported, then print where we ended up.
-          // `|| true` on the cd keeps a deleted directory from swallowing the
-          // command silently — it falls back to the container's default.
+          // `cd` into the tracked directory first, run the command in a group,
+          // then report where we ended up and what it exited with.
+          //
+          // Deliberately no `exit` at the end. The provider wraps this script in
+          // one of its own to detect changed files, and exiting here kills that
+          // wrapper before it can emit its markers — the run then never
+          // completes and the terminal hangs after the first command. The exit
+          // code rides on the marker line instead, and the provider's own exit
+          // code is ignored.
           //
           // The newline before `}` is load-bearing: it terminates the user's
           // command, so a trailing `#` comment cannot swallow what follows. A
@@ -140,7 +154,7 @@ export function useShell(
             command:
               `cd ${shellQuote(cwd)} 2>/dev/null || cd ${shellQuote(HOME)} 2>/dev/null || true; ` +
               `{ ${trimmed}\n}; __da_code=$?; ` +
-              `printf '\\n%s%s\\n' '${CWD_MARKER}' "$(pwd)"; exit $__da_code`,
+              `printf '\\n%s%s\\t%s\\n' '${CWD_MARKER}' "$(pwd)" "$__da_code"`,
           }),
           signal: controller.signal,
         });
@@ -164,22 +178,27 @@ export function useShell(
 
         setUnavailable(null);
         let wroteFiles = false;
-        let nextCwd: string | null = null;
+        let trailer: Trailer = { cwd: null, exitCode: null };
+        // Accumulated outside React state: the marker can be split across two
+        // chunks, so the raw text has to be reassembled somewhere stable before
+        // it can be parsed out.
+        let raw = "";
 
         await readEventStream(response.body, (event) => {
           if (event.type === "output") {
-            patchLast((entry) => ({ ...entry, output: entry.output + event.chunk }));
+            raw += event.chunk;
+            const found = splitTrailer(raw);
+            if (found.trailer.cwd) trailer = found.trailer;
+            // Stripped on the way in, so the marker never flashes on screen.
+            patchLast((entry) => ({ ...entry, output: found.output }));
           } else if (event.type === "exit") {
-            // Pull the marker out of the finished output and adopt the
-            // directory the command left us in.
-            patchLast((entry) => {
-              const found = readCwdMarker(entry.output);
-              if (found.cwd) nextCwd = found.cwd;
-              return { ...entry, output: found.output };
-            });
+            const found = splitTrailer(raw);
+            if (found.trailer.cwd) trailer = found.trailer;
             patchLast((entry) => ({
               ...entry,
-              exitCode: event.exitCode,
+              output: found.output,
+              // The provider's exit code is the wrapper's, not the command's.
+              exitCode: trailer.exitCode ?? event.exitCode,
               durationMs: event.durationMs,
             }));
             if (event.changedFiles.length > 0) wroteFiles = true;
@@ -189,7 +208,7 @@ export function useShell(
           }
         });
 
-        if (nextCwd) setCwd(nextCwd);
+        if (trailer.cwd) setCwd(trailer.cwd);
         if (wroteFiles) onWorkspaceChanged?.();
       } catch (cause) {
         if (controller.signal.aborted) {
@@ -224,17 +243,46 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
-/** Split the trailing working-directory marker off a command's output. */
-function readCwdMarker(output: string): { output: string; cwd: string | null } {
-  const at = output.lastIndexOf(CWD_MARKER);
-  if (at === -1) return { output, cwd: null };
-
-  const after = output.slice(at + CWD_MARKER.length);
-  const cwd = after.split("\n")[0].trim();
-  // Also drop the newline the wrapper printed before the marker.
-  const before = output.slice(0, at).replace(/\n$/, "");
-  return { output: before, cwd: cwd || null };
+interface Trailer {
+  cwd: string | null;
+  exitCode: number | null;
 }
+
+/**
+ * Split the wrapper's trailing marker off a command's output.
+ *
+ * Tolerates a partial marker at the end of the buffer: mid-stream the line may
+ * be half-arrived, and showing half of it is no better than showing all of it.
+ */
+function splitTrailer(output: string): { output: string; trailer: Trailer } {
+  const at = output.lastIndexOf(CWD_MARKER);
+
+  if (at === -1) {
+    // The marker itself may be split across chunks. Hide any suffix of the
+    // buffer that could still turn into one.
+    for (let length = CWD_MARKER.length - 1; length > 0; length -= 1) {
+      if (output.endsWith(CWD_MARKER.slice(0, length))) {
+        return { output: output.slice(0, -length), trailer: BLANK_TRAILER };
+      }
+    }
+    return { output, trailer: BLANK_TRAILER };
+  }
+
+  const line = output.slice(at + CWD_MARKER.length).split("\n")[0];
+  const [cwd, code] = line.split("\t");
+  const parsed = Number(code);
+
+  return {
+    // Also drop the newline the wrapper printed before the marker.
+    output: output.slice(0, at).replace(/\n$/, ""),
+    trailer: {
+      cwd: cwd?.trim() || null,
+      exitCode: Number.isFinite(parsed) ? parsed : null,
+    },
+  };
+}
+
+const BLANK_TRAILER: Trailer = { cwd: null, exitCode: null };
 
 /** Parse `data: {...}` frames out of the byte stream and dispatch each one. */
 async function readEventStream(
