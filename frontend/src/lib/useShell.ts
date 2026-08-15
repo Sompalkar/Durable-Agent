@@ -11,6 +11,14 @@
  * refuses on any other one. That refusal is surfaced as `unavailable` rather
  * than as an error, because it is a fact about the session's configuration and
  * the fix is a setting, not a retry.
+ *
+ * Each command is its own exec, so nothing carries over between them by
+ * itself — including the working directory, which makes `cd` look broken to
+ * anyone who has used a shell before. The directory is therefore tracked here
+ * and re-entered ahead of every command, and the resulting one is read back on
+ * a marker line that is stripped before display. Environment variables are not
+ * carried the same way: `export` still does not persist, because faking that
+ * convincingly would mean reimplementing a shell in the client.
  */
 
 import { useCallback, useRef, useState } from "react";
@@ -21,9 +29,22 @@ import type { ShellEntry, ShellEvent } from "./types";
 /** Scrollback cap. Long enough to follow a build, short enough to stay quick. */
 const MAX_ENTRIES = 100;
 
+/** Where a container's checkout lives. Matches the sandbox workspace. */
+const HOME = "/home/daytona/workspace";
+
+/**
+ * Sentinel the wrapper prints the working directory on.
+ *
+ * Long and unlikely enough that no ordinary output collides with it — if it
+ * did, the line would be eaten from the user's output.
+ */
+const CWD_MARKER = "__DA_CWD_9f3a__";
+
 export interface ShellState {
   entries: ShellEntry[];
   running: boolean;
+  /** Working directory, carried across commands so `cd` behaves normally. */
+  cwd: string;
   /** Set when the session's runtime has no persistent container. */
   unavailable: string | null;
   error: string | null;
@@ -51,6 +72,7 @@ export function useShell(
   const [running, setRunning] = useState(false);
   const [unavailable, setUnavailable] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [cwd, setCwd] = useState(HOME);
   const abortRef = useRef<AbortController | null>(null);
 
   // Reset during render rather than in an effect: an effect would paint the
@@ -105,7 +127,21 @@ export function useShell(
               : {}),
           },
           credentials: "include",
-          body: JSON.stringify({ command: trimmed }),
+          // `cd` into the tracked directory first, run the command in a group so
+          // its exit code is the one reported, then print where we ended up.
+          // `|| true` on the cd keeps a deleted directory from swallowing the
+          // command silently — it falls back to the container's default.
+          //
+          // The newline before `}` is load-bearing: it terminates the user's
+          // command, so a trailing `#` comment cannot swallow what follows. A
+          // `;` there instead is a syntax error, because after a newline the
+          // shell sees a `;` with no command in front of it.
+          body: JSON.stringify({
+            command:
+              `cd ${shellQuote(cwd)} 2>/dev/null || cd ${shellQuote(HOME)} 2>/dev/null || true; ` +
+              `{ ${trimmed}\n}; __da_code=$?; ` +
+              `printf '\\n%s%s\\n' '${CWD_MARKER}' "$(pwd)"; exit $__da_code`,
+          }),
           signal: controller.signal,
         });
 
@@ -128,11 +164,19 @@ export function useShell(
 
         setUnavailable(null);
         let wroteFiles = false;
+        let nextCwd: string | null = null;
 
         await readEventStream(response.body, (event) => {
           if (event.type === "output") {
             patchLast((entry) => ({ ...entry, output: entry.output + event.chunk }));
           } else if (event.type === "exit") {
+            // Pull the marker out of the finished output and adopt the
+            // directory the command left us in.
+            patchLast((entry) => {
+              const found = readCwdMarker(entry.output);
+              if (found.cwd) nextCwd = found.cwd;
+              return { ...entry, output: found.output };
+            });
             patchLast((entry) => ({
               ...entry,
               exitCode: event.exitCode,
@@ -145,6 +189,7 @@ export function useShell(
           }
         });
 
+        if (nextCwd) setCwd(nextCwd);
         if (wroteFiles) onWorkspaceChanged?.();
       } catch (cause) {
         if (controller.signal.aborted) {
@@ -162,7 +207,7 @@ export function useShell(
         abortRef.current = null;
       }
     },
-    [onWorkspaceChanged, patchLast, running, sessionId],
+    [cwd, onWorkspaceChanged, patchLast, running, sessionId],
   );
 
   const stop = useCallback(() => abortRef.current?.abort(), []);
@@ -171,7 +216,24 @@ export function useShell(
     setError(null);
   }, []);
 
-  return { entries, running, unavailable, error, run, stop, clear };
+  return { entries, running, cwd, unavailable, error, run, stop, clear };
+}
+
+/** Single-quote a string for `sh`, closing and reopening around any quote. */
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+/** Split the trailing working-directory marker off a command's output. */
+function readCwdMarker(output: string): { output: string; cwd: string | null } {
+  const at = output.lastIndexOf(CWD_MARKER);
+  if (at === -1) return { output, cwd: null };
+
+  const after = output.slice(at + CWD_MARKER.length);
+  const cwd = after.split("\n")[0].trim();
+  // Also drop the newline the wrapper printed before the marker.
+  const before = output.slice(0, at).replace(/\n$/, "");
+  return { output: before, cwd: cwd || null };
 }
 
 /** Parse `data: {...}` frames out of the byte stream and dispatch each one. */
