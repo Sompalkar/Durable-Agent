@@ -40,6 +40,35 @@ export function ShellPanel({
   const [historyStep, setHistoryStep] = useState(0);
   const endRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const surfaceRef = useRef<HTMLDivElement>(null);
+  const rulerRef = useRef<HTMLSpanElement>(null);
+  /**
+   * Panel width in characters.
+   *
+   * Sent with each command so the pty is sized to the panel: `ls` decides its
+   * column layout from the terminal width, and a hardcoded 80 would wrap in a
+   * narrow rail and waste half a wide one.
+   */
+  const columnsRef = useRef(80);
+
+  useEffect(() => {
+    const surface = surfaceRef.current;
+    const ruler = rulerRef.current;
+    if (!surface || !ruler) return;
+
+    const measure = () => {
+      // Ten characters, so rounding error is a tenth of what it would be.
+      const charWidth = ruler.getBoundingClientRect().width / 10;
+      if (!charWidth) return;
+      const usable = surface.clientWidth - 24;
+      columnsRef.current = Math.max(20, Math.floor(usable / charWidth));
+    };
+
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(surface);
+    return () => observer.disconnect();
+  }, []);
 
   // Follow output as it streams, the way a terminal does.
   useEffect(() => {
@@ -69,7 +98,7 @@ export function ShellPanel({
   const submit = () => {
     const command = value.trim();
     if (!command || shell.running) return;
-    void shell.run(command);
+    void shell.run(command, columnsRef.current);
     setValue("");
     setHistoryStep(0);
   };
@@ -126,11 +155,22 @@ export function ShellPanel({
         does. Guarded so it does not fight a selection the user is making.
       */}
       <div
+        ref={surfaceRef}
         onMouseUp={() => {
           if (!window.getSelection()?.toString()) inputRef.current?.focus();
         }}
-        className="min-h-0 flex-1 cursor-text overflow-y-auto bg-canvas px-3 py-2.5 font-mono text-[12.5px] leading-relaxed"
+        className="relative min-h-0 flex-1 cursor-text overflow-y-auto bg-canvas px-3 py-2.5 font-mono text-[12.5px] leading-relaxed"
       >
+        {/* Off-screen ruler for measuring character width. `aria-hidden` and
+            zero-height so it costs nothing but a measurement. */}
+        <span
+          ref={rulerRef}
+          aria-hidden
+          className="pointer-events-none absolute -z-10 select-none whitespace-pre opacity-0"
+        >
+          MMMMMMMMMM
+        </span>
+
         {shell.entries.length === 0 && !shell.running ? (
           <p className="pb-2 text-ink-faint">
             Type a command. <span className="text-ink-soft">↑</span> for history,{" "}

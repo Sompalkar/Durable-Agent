@@ -40,6 +40,9 @@ const HOME = "/home/daytona/workspace";
  */
 const CWD_MARKER = "__DA_CWD_9f3a__";
 
+/** Where the wrapped command is staged inside the container. */
+const SCRIPT_FILE = "/tmp/.da-shell-cmd";
+
 export interface ShellState {
   entries: ShellEntry[];
   running: boolean;
@@ -48,7 +51,8 @@ export interface ShellState {
   /** Set when the session's runtime has no persistent container. */
   unavailable: string | null;
   error: string | null;
-  run: (command: string) => Promise<void>;
+  /** `columns` is the panel width in characters, for tty-aware output. */
+  run: (command: string, columns?: number) => Promise<void>;
   stop: () => void;
   clear: () => void;
 }
@@ -93,7 +97,7 @@ export function useShell(
   }, []);
 
   const run = useCallback(
-    async (command: string) => {
+    async (command: string, columns = 80) => {
       const trimmed = command.trim();
       if (!trimmed || running) return;
 
@@ -136,26 +140,7 @@ export function useShell(
               : {}),
           },
           credentials: "include",
-          // `cd` into the tracked directory first, run the command in a group,
-          // then report where we ended up and what it exited with.
-          //
-          // Deliberately no `exit` at the end. The provider wraps this script in
-          // one of its own to detect changed files, and exiting here kills that
-          // wrapper before it can emit its markers — the run then never
-          // completes and the terminal hangs after the first command. The exit
-          // code rides on the marker line instead, and the provider's own exit
-          // code is ignored.
-          //
-          // The newline before `}` is load-bearing: it terminates the user's
-          // command, so a trailing `#` comment cannot swallow what follows. A
-          // `;` there instead is a syntax error, because after a newline the
-          // shell sees a `;` with no command in front of it.
-          body: JSON.stringify({
-            command:
-              `cd ${shellQuote(cwd)} 2>/dev/null || cd ${shellQuote(HOME)} 2>/dev/null || true; ` +
-              `{ ${trimmed}\n}; __da_code=$?; ` +
-              `printf '\\n%s%s\\t%s\\n' '${CWD_MARKER}' "$(pwd)" "$__da_code"`,
-          }),
+          body: JSON.stringify({ command: buildCommand(trimmed, cwd, columns) }),
           signal: controller.signal,
         });
 
@@ -186,7 +171,7 @@ export function useShell(
 
         await readEventStream(response.body, (event) => {
           if (event.type === "output") {
-            raw += event.chunk;
+            raw += clean(event.chunk);
             const found = splitTrailer(raw);
             if (found.trailer.cwd) trailer = found.trailer;
             // Stripped on the way in, so the marker never flashes on screen.
@@ -236,6 +221,90 @@ export function useShell(
   }, []);
 
   return { entries, running, cwd, unavailable, error, run, stop, clear };
+}
+
+/**
+ * Wrap the user's command so it runs on a real terminal.
+ *
+ * Without a tty `ls` prints one name per line, `git` and `less` disable their
+ * pagers, and nothing colourises — programs check `isatty` and quite reasonably
+ * assume they are talking to a pipe. `script` allocates a pseudo-terminal for a
+ * single command, which is enough to make output look the way it does in a
+ * shell, and it is in util-linux so it is present on essentially any image. If
+ * it is missing the command still runs, just without the tty.
+ *
+ * The script is delivered base64-encoded rather than quoted. `script -c` takes
+ * a command string, and nesting arbitrary user input inside that string inside
+ * the provider's own wrapper is three levels of quoting waiting to break.
+ */
+function buildCommand(command: string, cwd: string, columns: number): string {
+  const inner = [
+    // Match the pty to the panel, so wrapping and column counts line up.
+    `stty cols ${columns} rows 24 2>/dev/null || true`,
+    `export COLUMNS=${columns} TERM=xterm-256color`,
+    `cd ${shellQuote(cwd)} 2>/dev/null || cd ${shellQuote(HOME)} 2>/dev/null || true`,
+    // The newline is load-bearing: it terminates the command, so a trailing `#`
+    // comment cannot swallow what follows.
+    `${command}\n__da_code=$?`,
+    `printf '\\n%s%s\\t%s\\n' '${CWD_MARKER}' "$(pwd)" "$__da_code"`,
+  ].join("\n");
+
+  const encoded = base64(inner);
+
+  // No `exit` anywhere: the provider wraps this in a script of its own to
+  // detect changed files, and exiting kills that wrapper before it finishes —
+  // which hangs the terminal. The exit code rides on the marker line instead.
+  const run = `sh ${SCRIPT_FILE}`;
+
+  // `script` comes in two incompatible flavours — util-linux takes
+  // `-qec CMD FILE`, BSD takes `-q FILE CMD` — and some minimal images have
+  // neither. Each form is probed with a trivial command before use, so the
+  // terminal degrades to no-tty rather than failing outright.
+  //
+  // Every form reads stdin from /dev/null. There is no way to type into a
+  // running command here, so anything that waits on input — a bare `cat`, a
+  // package manager asking to confirm — would otherwise block until the
+  // 180-second timeout with the terminal frozen. EOF makes it exit instead.
+  // It also stops a probe from landing in an interactive shell on an image
+  // whose `script` takes neither form.
+  return (
+    `printf %s ${shellQuote(encoded)} | base64 -d > ${SCRIPT_FILE}; ` +
+    `if script -qec true /dev/null </dev/null >/dev/null 2>&1; then ` +
+    `script -qec ${shellQuote(run)} /dev/null </dev/null; ` +
+    `elif script -q /dev/null true </dev/null >/dev/null 2>&1; then ` +
+    `script -q /dev/null ${run} </dev/null; ` +
+    `else ${run} </dev/null; fi`
+  );
+}
+
+/** UTF-8 safe base64, which `btoa` alone is not. */
+function base64(text: string): string {
+  const bytes = new TextEncoder().encode(text);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+/**
+ * Make pty output printable.
+ *
+ * A pseudo-terminal ends lines with CRLF and sprays escape sequences for
+ * colour and cursor movement. Without stripping them every line double-spaces
+ * and the escapes render as mojibake. Colour is dropped rather than rendered:
+ * showing it means an ANSI-to-DOM parser, which is a bigger thing than this.
+ */
+function clean(text: string): string {
+  return text
+    // CSI and OSC sequences, plus single-character escapes.
+    .replace(/\u001B\][^\u0007\u001B]*(?:\u0007|\u001B\\)/g, "")
+    .replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/\u001B[@-Z\\-_]/g, "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "")
+    // Everything else in C0 except tab and newline. A pty echoes an EOF as
+    // `^D`, and control bytes otherwise render as mojibake. Tabs stay: `ls`
+    // separates its columns with them.
+    .replace(/[\u0000-\u0008\u000B-\u001F\u007F]/g, "");
 }
 
 /** Single-quote a string for `sh`, closing and reopening around any quote. */

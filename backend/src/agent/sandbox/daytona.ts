@@ -75,7 +75,17 @@ const EXIT_FILE = '/tmp/.agent-run.exit';
  * closely, then progressively cheaper as a command turns out to be long. A
  * five-minute command costs about 25 polls instead of 250.
  */
-const POLL_START_MS = 1_000;
+/**
+ * First poll delay.
+ *
+ * Was 1s, which set the floor for every interactive command: `ls` finishes in
+ * single-digit milliseconds and then sat waiting for the next tick. Most of a
+ * hand-typed command's latency was this number.
+ *
+ * The backoff below still protects a long build — by a minute in, polls are
+ * seconds apart — so the extra calls are spent only where somebody is watching.
+ */
+const POLL_START_MS = 120;
 const POLL_MAX_MS = 15_000;
 const POLL_BACKOFF = 1.35;
 
