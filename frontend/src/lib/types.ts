@@ -179,6 +179,17 @@ export interface SandboxStatus {
   persistent: boolean;
   startedAt: number | null;
   processes: SandboxProcess[];
+  /** Every port in LISTEN, including servers started by hand in the shell. */
+  ports: ListeningPort[];
+}
+
+/** A port the container is serving, and what is behind it. */
+export interface ListeningPort {
+  port: number;
+  pid: number;
+  command: string;
+  /** Set when the agent started it, so the row can also stop it. */
+  name: string | null;
 }
 
 /** One finished command in the shell's scrollback. */

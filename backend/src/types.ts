@@ -273,6 +273,17 @@ export interface SandboxStatus {
 	persistent: boolean;
 	startedAt: number | null;
 	processes: SandboxProcess[];
+	/** Every port in LISTEN, including servers the user started by hand. */
+	ports: ListeningPortInfo[];
+}
+
+/** A port the container is serving, and what is behind it. */
+export interface ListeningPortInfo {
+	port: number;
+	pid: number;
+	command: string;
+	/** True when the agent started it, so it can also be stopped by name. */
+	name: string | null;
 }
 
 /**

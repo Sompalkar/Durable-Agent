@@ -125,7 +125,11 @@
 		"DAYTONA_API_URL": "https://app.daytona.io/api",
 		"DAYTONA_TOOLBOX_URL": "https://proxy.app.daytona.io",
 		"DAYTONA_TARGET": "us",
-		"DAYTONA_SNAPSHOT": "",
+		// Also the container's size. The default is 1 CPU / 1GB, which cannot hold
+		// a dev server and the agent's browser at once — Chromium takes it over
+		// the limit and the kernel kills the dev server. `daytona-medium` is
+		// 2 CPU / 4GB / 8GB and carries the same image, desktop stack included.
+		"DAYTONA_SNAPSHOT": "daytona-medium",
 		"DAYTONA_ORG_ID": "",
 		// Minutes a sandbox may sit idle before the provider stops it. This is
 		// only a safety net — the session disposes its sandbox when a turn ends.

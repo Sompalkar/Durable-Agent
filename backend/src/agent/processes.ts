@@ -185,6 +185,71 @@ export async function listProcesses(
 	return processes;
 }
 
+/** A port something in the container is listening on. */
+export interface ListeningPort {
+	port: number;
+	pid: number;
+	command: string;
+}
+
+/** The desktop's own ports, and ssh. Not applications. */
+const INFRA_PORTS = new Set([22, 5900, 6080]);
+
+/**
+ * Plumbing that listens but is not the user's app. Matched by command because
+ * both pick their port at runtime: the provider's daemon varies by container,
+ * and the browser server takes whatever CDP port is free.
+ */
+const INFRA_COMMANDS = /bin\/daytona\b|\.agent-browser-server\.js|playwright.*run-server/;
+
+/**
+ * Every port the container is listening on, whoever started it.
+ *
+ * `listProcesses` only knows about servers the agent started, so a dev server
+ * the user launched from the shell is invisible — no preview, nothing to open.
+ * The kernel knows about both, so ask it: `/proc/net/tcp` for sockets in LISTEN,
+ * matched to a process by the socket inodes it holds open.
+ *
+ * Newlines are turned into spaces before any `for` loop: the shell this runs in
+ * has no newline in IFS, so a multi-line list arrives as one word and matches
+ * nothing.
+ */
+export async function listListeningPorts(sandbox: SandboxProvider): Promise<ListeningPort[]> {
+	const script = [
+		`listen=$(awk '$4=="0A" { split($2,a,":"); print $10"="a[2] }' /proc/net/tcp /proc/net/tcp6 2>/dev/null | tr '\\n' ' ')`,
+		`[ -n "$listen" ] || exit 0`,
+		`for d in /proc/[0-9]*; do`,
+		`  inodes=$(ls -l "$d/fd" 2>/dev/null | grep -oE 'socket:\\[[0-9]+\\]' | grep -oE '[0-9]+' | tr '\\n' ' ');`,
+		`  [ -n "$inodes" ] || continue;`,
+		`  hex=$(awk -v list="$listen" -v inos="$inodes" 'BEGIN {`,
+		`    n = split(inos, want, " "); m = split(list, have, " ");`,
+		`    for (i = 1; i <= n; i++) for (j = 1; j <= m; j++) {`,
+		`      split(have[j], pair, "=");`,
+		`      if (pair[1] == want[i]) { print pair[2]; exit }`,
+		`    } }');`,
+		`  [ -n "$hex" ] || continue;`,
+		`  port=$(printf '%d' "0x$hex" 2>/dev/null) || continue;`,
+		`  cmd=$(tr '\\0' ' ' < "$d/cmdline" 2>/dev/null | cut -c1-160);`,
+		`  printf '%s\\t%s\\t%s\\n' "$port" "$(basename "$d")" "$cmd";`,
+		`done`,
+	].join('\n');
+
+	const result = await sandbox.run({ command: script, files: [], timeoutSeconds: 30 });
+
+	const seen = new Set<number>();
+	const ports: ListeningPort[] = [];
+	for (const line of result.stdout.split('\n')) {
+		const [port, pid, command] = line.split('\t');
+		const value = Number(port);
+		if (!value || seen.has(value) || INFRA_PORTS.has(value)) continue;
+		const text = (command || '').trim();
+		if (INFRA_COMMANDS.test(text)) continue;
+		seen.add(value);
+		ports.push({ port: value, pid: Number(pid) || 0, command: text });
+	}
+	return ports.sort((a, b) => a.port - b.port);
+}
+
 /** Recent output from one process. */
 export async function readProcessLog(
 	sandbox: SandboxProvider,

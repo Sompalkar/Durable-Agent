@@ -19,6 +19,7 @@ const IDLE: SandboxStatus = {
   persistent: false,
   startedAt: null,
   processes: [],
+  ports: [],
 };
 
 export interface SandboxState {

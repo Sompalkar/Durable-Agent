@@ -78,11 +78,28 @@ function buildScript(action: BrowserAction): string {
 	].join('\n');
 }
 
+/**
+ * Make `require('playwright')` resolve, and find Chromium.
+ *
+ * A globally installed package is not on the module path of a script in /tmp,
+ * so NODE_PATH has to be set explicitly or every action dies on module lookup.
+ *
+ * The image ships Chromium at /usr/bin/chromium and Playwright drives it fine,
+ * so it is used when present — downloading Playwright's own build costs a few
+ * hundred megabytes and minutes on a container that has neither to spare.
+ */
 function installStep(): string {
 	return [
+		`export NODE_PATH="$(npm root -g)"`,
+		`if [ -x /usr/bin/chromium ]; then export AGENT_CHROMIUM=/usr/bin/chromium;`,
+		`elif [ -x /usr/bin/chromium-browser ]; then export AGENT_CHROMIUM=/usr/bin/chromium-browser;`,
+		`else export AGENT_CHROMIUM=""; fi`,
 		`if [ ! -f ${INSTALL_MARKER} ]; then`,
-		`  npm i -g playwright@${PLAYWRIGHT_VERSION} >/dev/null 2>&1 || { echo __FAILED__playwright-install; exit 1; }`,
-		`  npx --yes playwright@${PLAYWRIGHT_VERSION} install chromium >/dev/null 2>&1 || { echo __FAILED__chromium-download; exit 1; }`,
+		`  node -e "require('playwright')" 2>/dev/null || npm i -g playwright@${PLAYWRIGHT_VERSION} >/dev/null 2>&1 || { echo __FAILED__playwright-install; exit 1; }`,
+		`  export NODE_PATH="$(npm root -g)";`,
+		`  if [ -z "$AGENT_CHROMIUM" ]; then`,
+		`    npx --yes playwright@${PLAYWRIGHT_VERSION} install chromium >/dev/null 2>&1 || { echo __FAILED__chromium-download; exit 1; }`,
+		`  fi`,
 		`  touch ${INSTALL_MARKER};`,
 		`fi`,
 	].join('\n');
@@ -100,6 +117,7 @@ const { chromium } = require('playwright');
 const fs = require('fs');
 (async () => {
   const server = await chromium.launchServer({
+    ...(process.env.AGENT_CHROMIUM ? { executablePath: process.env.AGENT_CHROMIUM } : {}),
     args: ['--no-sandbox', '--disable-dev-shm-usage'],
   });
   fs.writeFileSync(${JSON.stringify(ENDPOINT_FILE)}, server.wsEndpoint());
@@ -198,5 +216,11 @@ function describeFailure(stdout: string, stderr: string): string {
 
 	const failure = text.indexOf('__FAILED__');
 	if (failure !== -1) return text.slice(failure + '__FAILED__'.length).split('\n')[0].trim();
+
+	// Node exits before the script's own catch can report these.
+	if (text.includes("Cannot find module 'playwright'")) return 'Playwright is not installed in the container.';
+	if (text.includes('Killed') || text.includes('out of memory')) {
+		return 'The container ran out of memory starting the browser. Stop the dev server or give it more memory.';
+	}
 	return 'The browser action failed.';
 }

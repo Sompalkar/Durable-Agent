@@ -31,7 +31,7 @@ import { DEFAULT_RUNTIME, isRuntime, keepsSandboxWarm, type Runtime } from '../a
 import type { SandboxStatus, SessionPreview, ShellEvent } from '../types';
 import { SandboxWorkspace } from '../agent/workspace/sandbox-workspace';
 import { isAgentAuthored } from '../agent/tool-runtime';
-import { listProcesses, stopProcess } from '../agent/processes';
+import { listListeningPorts, listProcesses, stopProcess } from '../agent/processes';
 import { runBrowserAction, type BrowserAction, type BrowserView } from '../agent/browser';
 import {
 	DESKTOP_PORT,
@@ -531,7 +531,7 @@ export class AgentSessionDO extends DurableObject<Env> {
 		const persistent = keepsSandboxWarm(this.runtime());
 
 		if (!sandboxId) {
-			return { running: false, persistent, startedAt: null, processes: [] };
+			return { running: false, persistent, startedAt: null, processes: [], ports: [] };
 		}
 
 		const startedAt = Number(this.getMeta('sandboxStartedAt') ?? 0) || null;
@@ -540,16 +540,28 @@ export class AgentSessionDO extends DurableObject<Env> {
 			sandboxId,
 			keepWarm: persistent,
 		});
-		if (!sandbox) return { running: false, persistent, startedAt, processes: [] };
+		if (!sandbox) return { running: false, persistent, startedAt, processes: [], ports: [] };
 
 		try {
-			const processes = await listProcesses(sandbox, null);
-			return { running: true, persistent, startedAt, processes };
+			const [processes, listening] = await Promise.all([
+				listProcesses(sandbox, null),
+				// A port scan is the only way to see a server the user started from
+				// the shell, and it must not take the whole status down with it.
+				listListeningPorts(sandbox).catch(() => []),
+			]);
+
+			// A managed process carries a name, so its row can also stop it.
+			const named = new Map(
+				processes.filter((p) => p.running && p.port !== null).map((p) => [p.port as number, p.name]),
+			);
+			const ports = listening.map((entry) => ({ ...entry, name: named.get(entry.port) ?? null }));
+
+			return { running: true, persistent, startedAt, processes, ports };
 		} catch {
 			// The provider reaped it, or it never came back. Either way the id is
 			// stale, and keeping it would make every later call fail the same way.
 			this.ctx.storage.sql.exec("DELETE FROM meta WHERE key = 'sandboxId'");
-			return { running: false, persistent, startedAt: null, processes: [] };
+			return { running: false, persistent, startedAt: null, processes: [], ports: [] };
 		}
 	}
 

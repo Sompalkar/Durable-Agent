@@ -9,7 +9,7 @@
  * one.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { classNames } from "@/lib/format";
 import type { SessionPreview } from "@/lib/types";
 import { EmptyState } from "@/components/ui/Feedback";
@@ -46,6 +46,17 @@ export function PreviewPanel({
 
   const expired = preview !== null && preview.expiresAt <= now;
 
+  // Nothing shown but something serving is the state everyone reads as broken,
+  // so the first port opens itself. Tried once per port: minting a link is a
+  // call into the container, and a failing one must not retry every poll.
+  const opened = useRef<number | null>(null);
+  const firstPort = sandbox.status.ports[0]?.port ?? null;
+  useEffect(() => {
+    if (preview || firstPort === null || opened.current === firstPort) return;
+    opened.current = firstPort;
+    void sandbox.openPort(firstPort);
+  }, [preview, firstPort, sandbox]);
+
   if (!preview) {
     // On the ephemeral runtime a dev server cannot survive the turn that
     // started it, so the honest empty state is about the runtime, not the port.
@@ -60,8 +71,12 @@ export function PreviewPanel({
         <div className="min-h-0 flex-1">
           <EmptyState
             icon={<BrowserIcon className="h-6 w-6" />}
-            title="Nothing is running"
-            description="Ask the agent to start a dev server. When it binds a port, the running app appears here."
+            title={firstPort ? "Opening…" : "Nothing is running"}
+            description={
+              firstPort
+                ? "A port is serving. Fetching a link to it."
+                : "Start a dev server — from the shell or by asking the agent. Whatever binds a port appears here."
+            }
           />
         </div>
       </div>

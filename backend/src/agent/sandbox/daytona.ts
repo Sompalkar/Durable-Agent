@@ -375,6 +375,9 @@ export class DaytonaSandbox implements SandboxProvider {
 			// the Worker dies mid-turn and never gets to clean up.
 			autoStopInterval: this.config.autoStopMinutes,
 		};
+		// The snapshot carries the container's size as well as its contents:
+		// Daytona refuses cpu/memory/disk on the same request, and there is
+		// always a snapshot, so `DAYTONA_SNAPSHOT` is how a sandbox is sized.
 		if (this.config.snapshot) body.snapshot = this.config.snapshot;
 
 		const response = await fetch(`${this.config.apiUrl}/sandbox`, {

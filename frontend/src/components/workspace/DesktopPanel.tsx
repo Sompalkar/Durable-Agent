@@ -98,9 +98,10 @@ export function DesktopPanel({
       ) : null}
 
       <iframe
-        // `resize=remote` asks the server to match the frame, so the desktop
-        // fills whatever width the rail has been dragged to.
-        src={`${desktop.url}/vnc.html?autoconnect=1&reconnect=1&resize=remote&show_dot=1`}
+        // `resize=scale` fits the whole 1280x800 display into the frame. The
+        // rail is a few hundred pixels wide, and `remote` needs a randr-capable
+        // server anyway — without one it leaves the desktop cropped.
+        src={`${desktop.url}/vnc.html?autoconnect=1&reconnect=1&resize=scale&show_dot=1`}
         title="Container desktop"
         className="min-h-0 flex-1 border-0 bg-black"
         allow="clipboard-read; clipboard-write"
