@@ -184,6 +184,13 @@ export const MonitorIcon = (props: IconProps) => (
   </Icon>
 );
 
+export const DesktopIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <rect x="2" y="4" width="20" height="13" rx="2" />
+    <path d="M2 13h20M9 21h6" />
+  </Icon>
+);
+
 export const ServerIcon = (props: IconProps) => (
   <Icon {...props}>
     <rect x="3" y="4" width="18" height="7" rx="2" />

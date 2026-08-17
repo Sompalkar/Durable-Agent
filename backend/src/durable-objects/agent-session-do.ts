@@ -33,6 +33,14 @@ import { SandboxWorkspace } from '../agent/workspace/sandbox-workspace';
 import { isAgentAuthored } from '../agent/tool-runtime';
 import { listProcesses, stopProcess } from '../agent/processes';
 import { runBrowserAction, type BrowserAction, type BrowserView } from '../agent/browser';
+import {
+	DESKTOP_PORT,
+	desktopStatus,
+	openOnDesktop,
+	startDesktop,
+	stopDesktop,
+	type DesktopStatus,
+} from '../agent/desktop';
 import type { CommandRecord, RepoContext, ToolContext } from '../agent/tool-runtime';
 import type {
 	AgentEvent,
@@ -609,11 +617,53 @@ export class AgentSessionDO extends DurableObject<Env> {
 		return preview;
 	}
 
-	/** Drive the container's browser. Needs a container, so sandbox runtime only. */
-	async browser(action: BrowserAction): Promise<BrowserView> {
+	/** The desktop's state, plus a signed URL when it is serving. */
+	async desktop(): Promise<DesktopStatus & { url: string | null }> {
+		const sandbox = this.containerSandbox();
+		if (!sandbox) return { running: false, ready: false, port: DESKTOP_PORT, url: null };
+
+		const status = await desktopStatus(sandbox).catch(() => null);
+		if (!status?.ready) return { running: false, ready: false, port: DESKTOP_PORT, url: null };
+
+		return { ...status, url: await this.desktopUrl(sandbox) };
+	}
+
+	async startDesktop(): Promise<DesktopStatus & { url: string | null }> {
+		const sandbox = this.requireContainer();
+		const status = await startDesktop(sandbox);
+		return { ...status, url: await this.desktopUrl(sandbox) };
+	}
+
+	async stopDesktop(): Promise<{ stopped: true }> {
+		const sandbox = this.containerSandbox();
+		if (sandbox) await stopDesktop(sandbox);
+		return { stopped: true };
+	}
+
+	async openOnDesktop(url: string): Promise<void> {
+		await openOnDesktop(this.requireContainer(), url);
+	}
+
+	private async desktopUrl(sandbox: SandboxProvider): Promise<string | null> {
+		if (!sandbox.previewUrl) return null;
+		return sandbox.previewUrl(DESKTOP_PORT, PREVIEW_TTL_MS / 1000).catch(() => null);
+	}
+
+	/** A provider for the existing container, or null when there is none. */
+	private containerSandbox(): SandboxProvider | null {
+		if (!this.getMeta('sandboxId')) return null;
+		return createSandbox(this.env, {
+			sessionId: this.getMeta('sessionId') ?? 'default',
+			sandboxId: this.getMeta('sandboxId') ?? undefined,
+			keepWarm: keepsSandboxWarm(this.runtime()),
+		});
+	}
+
+	/** Same, but creates the container and insists on the right runtime. */
+	private requireContainer(): SandboxProvider {
 		if (!keepsSandboxWarm(this.runtime())) {
 			throw new Error(
-				'The browser needs a container that survives between actions. Switch this session to "Always on".',
+				'This needs a container that survives between actions. Switch this session to "Always on".',
 			);
 		}
 
@@ -627,8 +677,12 @@ export class AgentSessionDO extends DurableObject<Env> {
 			},
 		});
 		if (!sandbox) throw new Error('No sandbox provider is configured on this deployment.');
+		return sandbox;
+	}
 
-		return runBrowserAction(sandbox, action);
+	/** Drive the container's browser. Needs a container, so sandbox runtime only. */
+	async browser(action: BrowserAction): Promise<BrowserView> {
+		return runBrowserAction(this.requireContainer(), action);
 	}
 
 	// ------------------------------------------------------- the user's shell

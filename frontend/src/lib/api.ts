@@ -22,6 +22,7 @@ import type {
   AttachedRepo,
   BrowserAction,
   BrowserView,
+  DesktopInfo,
   CommandRecord,
   GitHubIssueOption,
   GitHubRepoOption,
@@ -520,6 +521,22 @@ export const api = {
       method: "POST",
       body: JSON.stringify(action),
     });
+  },
+
+  desktop(id: string): Promise<DesktopInfo> {
+    return request(`/api/sessions/${id}/desktop`);
+  },
+
+  /** Starts the desktop, optionally opening a URL on it. */
+  startDesktop(id: string, url?: string): Promise<DesktopInfo> {
+    return request(`/api/sessions/${id}/desktop`, {
+      method: "POST",
+      body: JSON.stringify(url ? { url } : {}),
+    });
+  },
+
+  stopDesktop(id: string): Promise<{ stopped: boolean }> {
+    return request(`/api/sessions/${id}/desktop`, { method: "DELETE" });
   },
 
   // --------------------------------------------------------------- sandbox

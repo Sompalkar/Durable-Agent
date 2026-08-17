@@ -23,6 +23,7 @@ import type { SessionPreview } from "@/lib/types";
 import type { ShellState } from "@/lib/useShell";
 import type { SandboxState } from "@/lib/useSandbox";
 import type { BrowserSession } from "@/lib/useBrowser";
+import type { DesktopState } from "@/lib/useDesktop";
 import { ArchivePanel } from "@/components/archive/ArchivePanel";
 import { MemoryPanel } from "@/components/brain/MemoryPanel";
 import { SkillsPanel } from "@/components/brain/SkillsPanel";
@@ -30,6 +31,7 @@ import { SchedulePanel } from "@/components/schedule/SchedulePanel";
 import { PreviewPanel } from "@/components/workspace/PreviewPanel";
 import { ReviewPanel } from "@/components/workspace/ReviewPanel";
 import { AgentBrowserPanel } from "@/components/workspace/AgentBrowserPanel";
+import { DesktopPanel } from "@/components/workspace/DesktopPanel";
 import { ShellPanel } from "@/components/workspace/ShellPanel";
 import { WorkspacePanel } from "@/components/workspace/WorkspacePanel";
 import {
@@ -40,6 +42,7 @@ import {
   CloseIcon,
   FolderIcon,
   MonitorIcon,
+  DesktopIcon,
   GitBranchIcon,
   HistoryIcon,
   TerminalIcon,
@@ -51,6 +54,7 @@ export type RailTab =
   | "shell"
   | "browser"
   | "preview"
+  | "desktop"
   | "memory"
   | "skills"
   | "schedule"
@@ -66,6 +70,7 @@ const TABS: Array<{
   { id: "shell", label: "Shell", icon: TerminalIcon },
   { id: "browser", label: "Browser", icon: BrowserIcon },
   { id: "preview", label: "Preview", icon: MonitorIcon },
+  { id: "desktop", label: "Desktop", icon: DesktopIcon },
   { id: "memory", label: "Memory", icon: BrainIcon },
   { id: "skills", label: "Skills", icon: BookmarkIcon },
   { id: "schedule", label: "Agents", icon: ClockIcon },
@@ -86,6 +91,7 @@ export function RightRail({
   shell,
   sandbox,
   browser,
+  desktop,
   persistent,
   onEnablePersistent,
   onTaskReady,
@@ -96,6 +102,7 @@ export function RightRail({
   shell: ShellState;
   sandbox: SandboxState;
   browser: BrowserSession;
+  desktop: DesktopState;
   /** Whether the session keeps a container between turns. */
   persistent: boolean;
   onEnablePersistent: () => Promise<void>;
@@ -118,6 +125,7 @@ export function RightRail({
     browser: 0,
     // The port, so the tab reads "Preview 8020" while something is serving.
     preview: preview?.port ?? 0,
+    desktop: 0,
     memory: brain.memories.length,
     skills: brain.skills.length,
     schedule: schedules.schedules.filter((s) => s.status === "active").length,
@@ -210,6 +218,13 @@ export function RightRail({
             preview={preview}
             persistent={persistent}
             sandbox={sandbox}
+            onEnablePersistent={onEnablePersistent}
+          />
+        ) : null}
+        {tab === "desktop" ? (
+          <DesktopPanel
+            desktop={desktop}
+            persistent={persistent}
             onEnablePersistent={onEnablePersistent}
           />
         ) : null}

@@ -31,6 +31,7 @@ import { useResizable } from "@/lib/useResizable";
 import { useShell } from "@/lib/useShell";
 import { useSandbox } from "@/lib/useSandbox";
 import { useBrowser } from "@/lib/useBrowser";
+import { useDesktop } from "@/lib/useDesktop";
 import { ChatPanel } from "@/components/chat/ChatPanel";
 import { ModelPicker } from "@/components/chat/ModelPicker";
 import { RuntimeSwitch } from "@/components/chat/RuntimeSwitch";
@@ -104,6 +105,7 @@ export function SessionView({ sessionId }: { sessionId: string }) {
   );
 
   const browser = useBrowser(sessionId);
+  const desktop = useDesktop(sessionId, tab === "desktop");
 
   const shell = useShell(sessionId, {
     runtime: session?.runtime,
@@ -468,6 +470,7 @@ export function SessionView({ sessionId }: { sessionId: string }) {
           shell={shell}
           sandbox={sandbox}
           browser={browser}
+          desktop={desktop}
           persistent={session?.runtime === "sandbox"}
           onEnablePersistent={enablePersistent}
           onTaskReady={prefill}

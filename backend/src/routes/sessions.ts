@@ -195,6 +195,33 @@ sessionRoutes.post('/:id/browser', async (c) => {
 	}
 });
 
+/** GET /api/sessions/:id/desktop — is the desktop serving, and where? */
+sessionRoutes.get('/:id/desktop', async (c) => {
+	const stub = sessionStub(c.env, c.get('user').id, c.req.param('id'));
+	return c.json(await stub.desktop());
+});
+
+/** POST /api/sessions/:id/desktop — start it, or open a URL on it. */
+sessionRoutes.post('/:id/desktop', async (c) => {
+	const body = await readJson<{ url?: string }>(c.req.raw);
+	const stub = sessionStub(c.env, c.get('user').id, c.req.param('id'));
+
+	try {
+		if (typeof body.url === 'string' && body.url.trim()) {
+			await stub.openOnDesktop(body.url.trim());
+		}
+		return c.json(await stub.startDesktop());
+	} catch (cause) {
+		throw new ApiError(409, cause instanceof Error ? cause.message : 'The desktop failed.');
+	}
+});
+
+/** DELETE /api/sessions/:id/desktop — stop it, leave the container up. */
+sessionRoutes.delete('/:id/desktop', async (c) => {
+	const stub = sessionStub(c.env, c.get('user').id, c.req.param('id'));
+	return c.json(await stub.stopDesktop());
+});
+
 /** GET /api/sessions/:id/sandbox — is a container up, and what is it running? */
 sessionRoutes.get('/:id/sandbox', async (c) => {
 	const stub = sessionStub(c.env, c.get('user').id, c.req.param('id'));

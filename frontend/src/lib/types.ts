@@ -153,6 +153,15 @@ export interface BrowserView {
 /** Viewport the container's browser renders at; clicks map into this. */
 export const BROWSER_VIEWPORT = { width: 1280, height: 800 };
 
+/** The container's desktop, as the panel sees it. */
+export interface DesktopInfo {
+  running: boolean;
+  ready: boolean;
+  port: number;
+  /** Signed noVNC URL, present once it is serving. */
+  url: string | null;
+}
+
 /** A long-running process inside the container. */
 export interface SandboxProcess {
   name: string;
