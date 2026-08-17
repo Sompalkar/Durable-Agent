@@ -175,8 +175,8 @@ export class DaytonaSandbox implements SandboxProvider {
 
 		return {
 			exitCode: result.exitCode,
-			stdout: truncate(result.stdout),
-			stderr: truncate(result.stderr),
+			stdout: truncate(result.stdout, options.maxOutputChars),
+			stderr: truncate(result.stderr, options.maxOutputChars),
 			changedFiles: await this.collectChanges(sandboxId),
 			durationMs,
 		};
@@ -575,8 +575,6 @@ function byteLengthOf(value: string): number {
 	return new TextEncoder().encode(value).length;
 }
 
-function truncate(value: string): string {
-	return value.length <= MAX_OUTPUT_CHARS
-		? value
-		: `${value.slice(0, MAX_OUTPUT_CHARS)}\n… output truncated.`;
+function truncate(value: string, limit = MAX_OUTPUT_CHARS): string {
+	return value.length <= limit ? value : `${value.slice(0, limit)}\n… output truncated.`;
 }

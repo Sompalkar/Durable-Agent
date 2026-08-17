@@ -347,12 +347,18 @@ export class AgentSessionDO extends DurableObject<Env> {
 		};
 	}
 
-	/** The last exposed port, dropped once its signed link has expired. */
+	/**
+	 * The last exposed port, dropped once its link has expired — or once the
+	 * container it pointed at is gone. A signed link outlives its sandbox by up
+	 * to an hour, and serving one after the sandbox is replaced shows the user a
+	 * 404 from the provider where their app used to be.
+	 */
 	private preview(): SessionPreview | null {
 		const raw = this.getMeta('preview');
 		if (!raw) return null;
 		try {
-			const stored = JSON.parse(raw) as SessionPreview;
+			const { sandboxId, ...stored } = JSON.parse(raw) as SessionPreview & { sandboxId?: string };
+			if (sandboxId && sandboxId !== this.getMeta('sandboxId')) return null;
 			return stored.expiresAt > Date.now() ? stored : null;
 		} catch {
 			return null;
@@ -625,7 +631,8 @@ export class AgentSessionDO extends DurableObject<Env> {
 		if (!url) return null;
 
 		const preview: SessionPreview = { port, url, expiresAt: Date.now() + PREVIEW_TTL_MS };
-		this.setMeta('preview', JSON.stringify(preview));
+		// Tagged with its container so a later read can tell it is stale.
+		this.setMeta('preview', JSON.stringify({ ...preview, sandboxId }));
 		return preview;
 	}
 

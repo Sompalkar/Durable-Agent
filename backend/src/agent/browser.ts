@@ -52,6 +52,9 @@ export async function runBrowserAction(
 		files: [],
 		// The first call may install Playwright and download Chromium.
 		timeoutSeconds: 240,
+		// The frame comes back as base64 on stdout. At the default budget a
+		// screenshot of anything real is cut mid-string and stops being JSON.
+		maxOutputChars: 8 * 1024 * 1024,
 	});
 
 	const marker = result.stdout.lastIndexOf(RESULT_PREFIX);
