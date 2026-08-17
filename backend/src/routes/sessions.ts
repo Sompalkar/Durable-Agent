@@ -180,6 +180,21 @@ sessionRoutes.post('/:id/messages', async (c) => {
 	});
 });
 
+/** POST /api/sessions/:id/browser — drive the container's browser. */
+sessionRoutes.post('/:id/browser', async (c) => {
+	const action = await readJson<{ type?: string }>(c.req.raw);
+	if (typeof action.type !== 'string') {
+		throw ApiError.badRequest('"type" is required.');
+	}
+
+	const stub = sessionStub(c.env, c.get('user').id, c.req.param('id'));
+	try {
+		return c.json(await stub.browser(action as never));
+	} catch (cause) {
+		throw new ApiError(409, cause instanceof Error ? cause.message : 'The browser failed.');
+	}
+});
+
 /** GET /api/sessions/:id/sandbox — is a container up, and what is it running? */
 sessionRoutes.get('/:id/sandbox', async (c) => {
 	const stub = sessionStub(c.env, c.get('user').id, c.req.param('id'));

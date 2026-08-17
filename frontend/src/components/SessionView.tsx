@@ -30,6 +30,7 @@ import { useWorkspace } from "@/lib/useWorkspace";
 import { useResizable } from "@/lib/useResizable";
 import { useShell } from "@/lib/useShell";
 import { useSandbox } from "@/lib/useSandbox";
+import { useBrowser } from "@/lib/useBrowser";
 import { ChatPanel } from "@/components/chat/ChatPanel";
 import { ModelPicker } from "@/components/chat/ModelPicker";
 import { RuntimeSwitch } from "@/components/chat/RuntimeSwitch";
@@ -94,13 +95,15 @@ export function SessionView({ sessionId }: { sessionId: string }) {
   // command inside the container, and the container is billed while it lives.
   const sandbox = useSandbox(
     sessionId,
-    tab === "browser" || tab === "shell",
+    tab === "preview" || tab === "shell",
     useCallback(
       (preview: SessionPreview) =>
         setSession((current) => (current ? { ...current, preview } : current)),
       [],
     ),
   );
+
+  const browser = useBrowser(sessionId);
 
   const shell = useShell(sessionId, {
     runtime: session?.runtime,
@@ -464,6 +467,7 @@ export function SessionView({ sessionId }: { sessionId: string }) {
           preview={session?.preview ?? null}
           shell={shell}
           sandbox={sandbox}
+          browser={browser}
           persistent={session?.runtime === "sandbox"}
           onEnablePersistent={enablePersistent}
           onTaskReady={prefill}

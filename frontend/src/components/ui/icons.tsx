@@ -177,6 +177,13 @@ export const BrowserIcon = (props: IconProps) => (
   </Icon>
 );
 
+export const MonitorIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <rect x="3" y="4" width="18" height="12" rx="2" />
+    <path d="M8 20h8M12 16v4" />
+  </Icon>
+);
+
 export const ServerIcon = (props: IconProps) => (
   <Icon {...props}>
     <rect x="3" y="4" width="18" height="7" rx="2" />

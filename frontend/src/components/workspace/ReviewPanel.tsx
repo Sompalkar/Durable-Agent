@@ -1,15 +1,11 @@
 "use client";
 
 /**
- * Everything this session has changed, as a diff.
+ * Everything this session changed, as a diff.
  *
- * The same view a reviewer gets: each file against what it looked like before
- * the agent touched it, not against the previous edit. That baseline is what
- * makes this answer "should this be merged" rather than "what did the last
- * step do" — and it is free, because every write appends a revision.
- *
- * The list is the session's own record of what it changed, so it survives the
- * container being destroyed and is still right days later.
+ * Each file is compared against how it looked before the agent touched it —
+ * the reviewer's baseline, not the previous edit. The list comes from the
+ * session's own record, so it survives the container.
  */
 
 import { useState } from "react";
@@ -30,8 +26,7 @@ export function ReviewPanel({
   /** Opens the pull-request dialog. Only meaningful with a repo attached. */
   onOpenPullRequest?: () => void;
 }) {
-  // Open the first file by default: a review panel where everything starts
-  // collapsed makes you click once before it tells you anything.
+  // First file open by default, so the panel says something immediately.
   const [expanded, setExpanded] = useState<Set<string>>(
     () => new Set(repo.changedPaths.slice(0, 1)),
   );

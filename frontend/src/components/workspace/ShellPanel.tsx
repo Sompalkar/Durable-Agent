@@ -3,18 +3,10 @@
 /**
  * A terminal for the session's container.
  *
- * One surface, not a log plus a form. The prompt is the last line of the
- * scrollback and you type directly on it, because a box docked underneath the
- * output is a search field with a shell behind it — everything about where the
- * cursor sits and how the history reads is wrong.
- *
- * What it is not is a pty. There is no pseudo-terminal on the other end, so no
- * `vim`, no colours, no job control, and Ctrl-C abandons the request rather
- * than signalling the process. The working directory does carry between
- * commands (see `useShell`); environment variables do not.
- *
- * History is per-mount and lives in memory. Persisting it would imply the
- * container is permanent, and it is not.
+ * The prompt is the last line of the scrollback, not a box docked beneath it.
+ * Commands run on a pty, but there is no persistent session: Ctrl-C abandons
+ * the request rather than signalling the process, and only the working
+ * directory carries between commands.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -42,13 +34,7 @@ export function ShellPanel({
   const inputRef = useRef<HTMLInputElement>(null);
   const surfaceRef = useRef<HTMLDivElement>(null);
   const rulerRef = useRef<HTMLSpanElement>(null);
-  /**
-   * Panel width in characters.
-   *
-   * Sent with each command so the pty is sized to the panel: `ls` decides its
-   * column layout from the terminal width, and a hardcoded 80 would wrap in a
-   * narrow rail and waste half a wide one.
-   */
+  /** Panel width in characters, so the pty matches what you can see. */
   const columnsRef = useRef(80);
 
   useEffect(() => {
@@ -57,7 +43,6 @@ export function ShellPanel({
     if (!surface || !ruler) return;
 
     const measure = () => {
-      // Ten characters, so rounding error is a tenth of what it would be.
       const charWidth = ruler.getBoundingClientRect().width / 10;
       if (!charWidth) return;
       const usable = surface.clientWidth - 24;
@@ -82,9 +67,6 @@ export function ShellPanel({
   }, [shell.running]);
 
   if (shell.unavailable) {
-    // The fix is one setting, so it is offered here rather than described.
-    // Telling someone which switch to flip and then not flipping it is the
-    // most annoying shape an error message can take.
     return (
       <EmptyState
         icon={<TerminalIcon className="h-6 w-6" />}
@@ -123,8 +105,7 @@ export function ShellPanel({
       event.preventDefault();
       recall(-1);
     } else if (event.key === "c" && event.ctrlKey) {
-      // Only when nothing is selected — otherwise this is a copy, and stealing
-      // Ctrl-C from a selection is the rudest thing a terminal can do.
+      // Not when text is selected — that is a copy.
       if (!window.getSelection()?.toString()) {
         event.preventDefault();
         if (shell.running) shell.stop();
@@ -150,10 +131,7 @@ export function ShellPanel({
         ) : null}
       </header>
 
-      {/*
-        Clicking anywhere puts the caret on the prompt, which is what a terminal
-        does. Guarded so it does not fight a selection the user is making.
-      */}
+      {/* Clicking anywhere focuses the prompt, unless text is selected. */}
       <div
         ref={surfaceRef}
         onMouseUp={() => {
@@ -161,8 +139,7 @@ export function ShellPanel({
         }}
         className="relative min-h-0 flex-1 cursor-text overflow-y-auto bg-canvas px-3 py-2.5 font-mono text-[12.5px] leading-relaxed"
       >
-        {/* Off-screen ruler for measuring character width. `aria-hidden` and
-            zero-height so it costs nothing but a measurement. */}
+        {/* Ruler for measuring character width. */}
         <span
           ref={rulerRef}
           aria-hidden
@@ -194,8 +171,7 @@ export function ShellPanel({
               </pre>
             ) : null}
 
-            {/* Only a failure is annotated. Printing `exit 0` after every
-                command is noise no terminal produces. */}
+            {/* Only failures are annotated; no shell prints `exit 0`. */}
             {entry.exitCode !== null && entry.exitCode !== 0 ? (
               <p className="text-[11.5px] text-negative">
                 exit {entry.exitCode}
@@ -223,8 +199,6 @@ export function ShellPanel({
               autoCapitalize="off"
               autoCorrect="off"
               aria-label="Shell command"
-              // Styled to disappear: the surrounding surface is the terminal, so
-              // anything that reads as a form control here is wrong.
               className="min-w-0 flex-1 bg-transparent p-0 font-mono text-[12.5px] leading-relaxed text-ink caret-accent outline-none focus-visible:outline-none"
             />
           </div>
@@ -253,12 +227,7 @@ function prettyPath(cwd: string): string {
   return cwd;
 }
 
-/**
- * Switches the session to the persistent runtime.
- *
- * Shared by the shell and the browser, because both are unavailable for the
- * same reason and the remedy is identical.
- */
+/** Shared by the shell and browser panels, which fail for the same reason. */
 export function EnablePersistentButton({
   onEnable,
 }: {

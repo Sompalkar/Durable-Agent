@@ -3,15 +3,9 @@
 /**
  * Where this session's work happens.
  *
- * Promoted out of the model picker and into the header because it is not a
- * preference — it decides whether the session has a shell, whether a dev server
- * can stay up, and whether anything is billed between messages. It was buried
- * in a submenu, defaulted to the restrictive option, and silently disabled two
- * whole panels; people reasonably concluded those panels were broken.
- *
- * Named for what you get rather than for how it works. "Durable Object" and
- * "sandbox" are implementation; "does my dev server survive" is the question
- * being answered.
+ * In the header rather than a submenu: it decides whether the session has a
+ * shell and a browser at all, and whether anything is billed between messages.
+ * Named for what you get, not for how it works.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -90,8 +84,7 @@ export function RuntimeSwitch({
             : "text-ink-soft hover:bg-hover hover:text-ink",
         )}
       >
-        {/* A live container is the one state worth a colour: it is the one
-            costing money while nobody is looking at it. */}
+        {/* A live container is the one state worth a colour: it costs money. */}
         <span
           className={classNames(
             "h-1.5 w-1.5 shrink-0 rounded-full",

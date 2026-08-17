@@ -32,6 +32,7 @@ import type { SandboxStatus, SessionPreview, ShellEvent } from '../types';
 import { SandboxWorkspace } from '../agent/workspace/sandbox-workspace';
 import { isAgentAuthored } from '../agent/tool-runtime';
 import { listProcesses, stopProcess } from '../agent/processes';
+import { runBrowserAction, type BrowserAction, type BrowserView } from '../agent/browser';
 import type { CommandRecord, RepoContext, ToolContext } from '../agent/tool-runtime';
 import type {
 	AgentEvent,
@@ -606,6 +607,28 @@ export class AgentSessionDO extends DurableObject<Env> {
 		const preview: SessionPreview = { port, url, expiresAt: Date.now() + PREVIEW_TTL_MS };
 		this.setMeta('preview', JSON.stringify(preview));
 		return preview;
+	}
+
+	/** Drive the container's browser. Needs a container, so sandbox runtime only. */
+	async browser(action: BrowserAction): Promise<BrowserView> {
+		if (!keepsSandboxWarm(this.runtime())) {
+			throw new Error(
+				'The browser needs a container that survives between actions. Switch this session to "Always on".',
+			);
+		}
+
+		const sandbox = createSandbox(this.env, {
+			sessionId: this.getMeta('sessionId') ?? 'default',
+			sandboxId: this.getMeta('sandboxId') ?? undefined,
+			keepWarm: true,
+			onSandboxCreated: (id) => {
+				this.setMeta('sandboxId', id);
+				this.setMeta('sandboxStartedAt', String(Date.now()));
+			},
+		});
+		if (!sandbox) throw new Error('No sandbox provider is configured on this deployment.');
+
+		return runBrowserAction(sandbox, action);
 	}
 
 	// ------------------------------------------------------- the user's shell

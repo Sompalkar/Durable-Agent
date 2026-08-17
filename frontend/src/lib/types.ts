@@ -130,6 +130,29 @@ export type ShellEvent =
     }
   | { type: "error"; message: string };
 
+/** One thing the browser panel can ask the container's browser to do. */
+export type BrowserAction =
+  | { type: "status" }
+  | { type: "navigate"; url: string }
+  | { type: "click"; x: number; y: number }
+  | { type: "type"; text: string }
+  | { type: "key"; key: string }
+  | { type: "scroll"; dy: number }
+  | { type: "back" }
+  | { type: "forward" }
+  | { type: "reload" };
+
+export interface BrowserView {
+  url: string;
+  title: string;
+  /** Base64 JPEG of the viewport. */
+  image: string;
+  consoleErrors: string[];
+}
+
+/** Viewport the container's browser renders at; clicks map into this. */
+export const BROWSER_VIEWPORT = { width: 1280, height: 800 };
+
 /** A long-running process inside the container. */
 export interface SandboxProcess {
   name: string;

@@ -3,14 +3,9 @@
 /**
  * The container, and the switch that turns it off.
  *
- * Offering an always-on runtime without a visible stop button is how people get
- * a surprise bill: the thing that costs money does so while nobody is looking
- * at it, which is exactly when it is easiest to forget. So the state is stated
- * plainly — up or not, since when — and stopping it is one click, always in the
- * same place.
- *
- * Stopping the container does not touch the session. Files, history and the
- * conversation were never in it.
+ * An always-on container bills while nobody is watching, so the state and the
+ * stop button are always visible. Stopping it does not touch the session —
+ * files and history were never in the container.
  */
 
 import { useEffect, useState } from "react";
@@ -20,9 +15,7 @@ import { ServerIcon, StopIcon } from "@/components/ui/icons";
 
 export function ContainerBar({ sandbox }: { sandbox: SandboxState }) {
   const [stopping, setStopping] = useState(false);
-  // Uptime is derived from a ticking clock rather than read during render:
-  // `Date.now()` in a render body is impure and gives a value that changes
-  // only when something unrelated happens to re-render.
+  // A ticking clock, because `Date.now()` in render is impure.
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 30_000);
@@ -47,8 +40,7 @@ export function ContainerBar({ sandbox }: { sandbox: SandboxState }) {
     <div
       className={classNames(
         "flex shrink-0 items-center gap-2 border-b border-line px-3 py-2",
-        // Only the billed state gets colour. An ephemeral container is gone in
-        // seconds and does not warrant a warning.
+        // Only the billed state gets colour.
         status.persistent ? "bg-accent-dim" : "bg-raised",
       )}
     >

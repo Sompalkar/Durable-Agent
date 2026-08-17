@@ -22,12 +22,14 @@ import type { WorkspaceState } from "@/lib/useWorkspace";
 import type { SessionPreview } from "@/lib/types";
 import type { ShellState } from "@/lib/useShell";
 import type { SandboxState } from "@/lib/useSandbox";
+import type { BrowserSession } from "@/lib/useBrowser";
 import { ArchivePanel } from "@/components/archive/ArchivePanel";
 import { MemoryPanel } from "@/components/brain/MemoryPanel";
 import { SkillsPanel } from "@/components/brain/SkillsPanel";
 import { SchedulePanel } from "@/components/schedule/SchedulePanel";
 import { PreviewPanel } from "@/components/workspace/PreviewPanel";
 import { ReviewPanel } from "@/components/workspace/ReviewPanel";
+import { AgentBrowserPanel } from "@/components/workspace/AgentBrowserPanel";
 import { ShellPanel } from "@/components/workspace/ShellPanel";
 import { WorkspacePanel } from "@/components/workspace/WorkspacePanel";
 import {
@@ -37,6 +39,7 @@ import {
   ClockIcon,
   CloseIcon,
   FolderIcon,
+  MonitorIcon,
   GitBranchIcon,
   HistoryIcon,
   TerminalIcon,
@@ -47,6 +50,7 @@ export type RailTab =
   | "review"
   | "shell"
   | "browser"
+  | "preview"
   | "memory"
   | "skills"
   | "schedule"
@@ -61,6 +65,7 @@ const TABS: Array<{
   { id: "review", label: "Review", icon: GitBranchIcon },
   { id: "shell", label: "Shell", icon: TerminalIcon },
   { id: "browser", label: "Browser", icon: BrowserIcon },
+  { id: "preview", label: "Preview", icon: MonitorIcon },
   { id: "memory", label: "Memory", icon: BrainIcon },
   { id: "skills", label: "Skills", icon: BookmarkIcon },
   { id: "schedule", label: "Agents", icon: ClockIcon },
@@ -80,6 +85,7 @@ export function RightRail({
   preview,
   shell,
   sandbox,
+  browser,
   persistent,
   onEnablePersistent,
   onTaskReady,
@@ -89,6 +95,7 @@ export function RightRail({
   preview: SessionPreview | null;
   shell: ShellState;
   sandbox: SandboxState;
+  browser: BrowserSession;
   /** Whether the session keeps a container between turns. */
   persistent: boolean;
   onEnablePersistent: () => Promise<void>;
@@ -108,8 +115,9 @@ export function RightRail({
     review: repo.changedPaths.length,
     // Commands run this session. Zero reads as "nothing typed yet".
     shell: shell.entries.length,
-    // The port, so the tab reads "Browser 8020" while something is serving.
-    browser: preview?.port ?? 0,
+    browser: 0,
+    // The port, so the tab reads "Preview 8020" while something is serving.
+    preview: preview?.port ?? 0,
     memory: brain.memories.length,
     skills: brain.skills.length,
     schedule: schedules.schedules.filter((s) => s.status === "active").length,
@@ -191,6 +199,13 @@ export function RightRail({
           <ShellPanel shell={shell} onEnablePersistent={onEnablePersistent} />
         ) : null}
         {tab === "browser" ? (
+          <AgentBrowserPanel
+            browser={browser}
+            persistent={persistent}
+            onEnablePersistent={onEnablePersistent}
+          />
+        ) : null}
+        {tab === "preview" ? (
           <PreviewPanel
             preview={preview}
             persistent={persistent}

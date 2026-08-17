@@ -20,6 +20,8 @@ import { readSessionToken, writeSessionToken } from "./session-token";
 import type {
   AccountUsage,
   AttachedRepo,
+  BrowserAction,
+  BrowserView,
   CommandRecord,
   GitHubIssueOption,
   GitHubRepoOption,
@@ -511,6 +513,13 @@ export const api = {
   /** Fire a schedule immediately rather than waiting for its alarm. */
   runScheduleNow(id: number): Promise<{ run: ScheduledRun }> {
     return request(`/api/schedules/${id}/run`, { method: "POST" });
+  },
+
+  browserAction(id: string, action: BrowserAction): Promise<BrowserView> {
+    return request(`/api/sessions/${id}/browser`, {
+      method: "POST",
+      body: JSON.stringify(action),
+    });
   },
 
   // --------------------------------------------------------------- sandbox

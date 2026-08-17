@@ -1,14 +1,10 @@
 "use client";
 
 /**
- * The session's container: whether one is up, what it is running, and the
- * controls to stop either.
+ * The session's container: what is up, what it runs, how to stop either.
  *
- * Polled rather than pushed, and only while something is actually looking at
- * it. A status read costs a command inside the container, so a background poll
- * for a panel nobody has open is pure waste — and on the always-on runtime the
- * container is billed the whole time, which makes an idle poll worse than
- * merely useless.
+ * Polled only while a panel showing it is open — a status read costs a command
+ * inside a container that is billed while it lives.
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -54,8 +50,7 @@ export function useSandbox(
     let cancelled = false;
 
     const read = async (first = false) => {
-      // Only the first read shows a spinner; a poll that flickers the panel
-      // every fifteen seconds is worse than one that updates quietly.
+      // Only the first read shows a spinner; later polls update quietly.
       if (first) setLoading(true);
       try {
         const next = await api.sandboxStatus(sessionId);
@@ -73,8 +68,7 @@ export function useSandbox(
 
     void read(true);
 
-    // Stops while the tab is hidden — the container is not being watched, and
-    // on a laptop this is the difference between a quiet tab and a warm one.
+    // Stops while the tab is hidden.
     const tick = () => {
       if (document.visibilityState === "visible") void read();
     };

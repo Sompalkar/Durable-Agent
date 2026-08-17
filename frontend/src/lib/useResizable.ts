@@ -3,15 +3,8 @@
 /**
  * A drag-to-resize width, remembered across sessions.
  *
- * The rail holds a file tree, a diff, and a terminal — three things whose
- * useful width differs by a factor of two. A fixed width means one of them is
- * always wrong, so the width is the user's to set, and it persists because
- * re-dragging it on every visit would be its own annoyance.
- *
- * Pointer events rather than mouse events, so a trackpad drag and a touch drag
- * take the same path. The listeners live on `window` for the duration of the
- * drag: the pointer routinely leaves the 4px handle mid-gesture, and a handler
- * bound to the handle alone would lose it.
+ * Listeners live on `window` for the duration of the drag: the pointer leaves
+ * the handle mid-gesture, and a handler bound to the handle would lose it.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -47,13 +40,8 @@ export function useResizable({
   max: number;
   edge?: "left" | "right";
 }): Resizable {
-  /**
-   * Seeded from storage in the initialiser rather than in an effect.
-   *
-   * That would normally risk a hydration mismatch, but callers apply this width
-   * only once they know they are on a wide viewport — which is itself decided
-   * after mount — so the value is not part of the first render's output.
-   */
+  // Safe in the initialiser: callers only apply the width once they know the
+  // viewport is wide, which is decided after mount.
   const [width, setWidth] = useState(() => {
     if (typeof window === "undefined") return initial;
     try {
@@ -87,9 +75,7 @@ export function useResizable({
       setDragging(true);
 
       const move = (moveEvent: PointerEvent) => {
-        // Coalesced into one update per frame. Pointer events fire faster than
-        // the screen refreshes, and re-laying out the rail on each one makes
-        // the drag feel heavier than the pointer.
+        // One update per frame; pointer events outpace the screen.
         if (frame.current !== null) cancelAnimationFrame(frame.current);
         frame.current = requestAnimationFrame(() => {
           commit(
@@ -114,8 +100,7 @@ export function useResizable({
     [commit, edge],
   );
 
-  // Keyboard resizing, because a drag handle that only responds to a pointer is
-  // unreachable for anyone not using one.
+  // Keyboard resizing, so the handle is not pointer-only.
   const onKeyDown = useCallback(
     (event: React.KeyboardEvent) => {
       const step = event.shiftKey ? 64 : 16;
