@@ -592,31 +592,42 @@ export class AgentSessionDO extends DurableObject<Env> {
 		const writer = writable.getWriter();
 		const encoder = new TextEncoder();
 
-		let flushing: Promise<void> = Promise.resolve();
-		const send = (event: AgentEvent) => {
-			flushing = flushing.then(async () => {
-				await writer.write(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
-			});
-		};
-
-		// Snapshot before subscribing, so nothing arrives twice and nothing
-		// slips through the gap between the two.
-		const replay = [...this.turnEvents];
+		// Declared up front so both `send` and `watcher` can unsubscribe it.
 		const watcher = (event: AgentEvent) => {
 			send(event);
-			if (event.type === 'turn_end' || event.type === 'error') {
-				this.watchers.delete(watcher);
-				void flushing.then(() => writer.close().catch(() => {}));
-			}
+			// The turn is over, so there is nothing left to follow.
+			if (event.type === 'turn_end' || event.type === 'error') detach();
+		};
+
+		const detach = () => {
+			this.watchers.delete(watcher);
+			void flushing.then(() => writer.close().catch(() => {}));
+		};
+
+		let flushing: Promise<void> = Promise.resolve();
+		const send = (event: AgentEvent) => {
+			flushing = flushing
+				.then(async () => {
+					await writer.write(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+				})
+				// A browser can close a tab mid-turn. Without this the failed write
+				// poisons the chain and the watcher keeps being handed events for
+				// the rest of the turn, failing every time.
+				.catch(() => {
+					this.watchers.delete(watcher);
+				});
 		};
 
 		if (this.running) {
+			// Subscribed before the snapshot is sent, so nothing that arrives in
+			// between is lost. Both go through the same ordered queue, so the
+			// replay still reaches the browser ahead of the live events.
 			this.watchers.add(watcher);
-			for (const event of replay) send(event);
+			for (const event of [...this.turnEvents]) send(event);
 		} else {
 			// Nothing to follow. Replaying anyway would leave the browser waiting
 			// for an end event that already happened.
-			void flushing.then(() => writer.close().catch(() => {}));
+			detach();
 		}
 
 		return new Response(readable, {
