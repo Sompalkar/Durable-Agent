@@ -562,6 +562,11 @@ export const api = {
     });
   },
 
+  /** Ask the running turn to wind up at its next safe point. */
+  stopTurn(id: string): Promise<{ stopping: boolean }> {
+    return request(`/api/sessions/${id}/stop`, { method: "POST" });
+  },
+
   /** URL for the streaming turn endpoint, consumed by `useAgentStream`. */
   messagesUrl(id: string): string {
     return `${BASE_URL}/api/sessions/${id}/messages`;

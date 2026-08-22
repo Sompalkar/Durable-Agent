@@ -159,8 +159,9 @@ export function ChatPanel({
         key={draft?.key ?? "empty"}
         initialValue={draft?.text}
         streaming={stream.streaming}
+        stopping={stream.stopping}
         onSend={onSend}
-        onStop={stream.stop}
+        onStop={() => void stream.stop()}
         controls={composerControls}
       />
     </section>

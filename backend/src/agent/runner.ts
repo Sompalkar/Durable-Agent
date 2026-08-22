@@ -43,6 +43,12 @@ export interface RunOptions {
 	/** Full conversation so far, including the new user message. */
 	messages: Anthropic.MessageParam[];
 	emit: (event: AgentEvent) => void;
+	/**
+	 * Asked between steps and on every streamed delta. Returning true ends the
+	 * turn at the next safe point — a tool already running is left to finish,
+	 * because killing it halfway is how a workspace ends up inconsistent.
+	 */
+	shouldStop?: () => boolean;
 }
 
 export interface RunResult {
@@ -108,8 +114,18 @@ export async function runAgentTurn(options: RunOptions): Promise<RunResult> {
 	// ran out of iterations. Those look identical to a caller otherwise, and the
 	// second one needs saying out loud.
 	let exhausted = true;
+	// Distinguishes "the user pressed stop" from every other way out, so the
+	// turn can end with an honest reason instead of looking finished.
+	let stopped = false;
 
 	for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
+		// The cheapest place to stop: before paying for another API call.
+		if (options.shouldStop?.()) {
+			stopped = true;
+			exhausted = false;
+			break;
+		}
+
 		// Collapse stale tool output before sending. The stored transcript keeps
 		// everything; only what the model re-reads is trimmed.
 		const { messages: sendable, charactersSaved } = pruneContext(messages, DEFAULT_PRUNE);
@@ -133,46 +149,101 @@ export async function runAgentTurn(options: RunOptions): Promise<RunResult> {
 			? ({ output_config: { effort: effort as 'low' | 'medium' | 'high' | 'xhigh' | 'max' } } as const)
 			: {};
 
-		const stream = client.messages.stream({
-			model: stepModel,
-			max_tokens: MAX_TOKENS,
-			...thinkingParams,
-			...effortParams,
-			system: [
-				{
-					type: 'text',
-					text: SYSTEM_PROMPT,
-					// Stable prefix — cached across every turn of every session.
-					cache_control: { type: 'ephemeral' },
-				},
-				// Everything volatile goes after the breakpoint, so saving a memory
-				// does not invalidate the cache for the whole conversation.
-				{ type: 'text', text: contextBlock },
-			],
-			tools: toolDefinitions,
-			messages: sendable,
-		});
+		// Aborting the request is what actually stops the spend. Breaking out of
+		// the loop alone would leave the model generating into a dropped stream.
+		const controller = new AbortController();
+
+		const stream = client.messages.stream(
+			{
+				model: stepModel,
+				max_tokens: MAX_TOKENS,
+				...thinkingParams,
+				...effortParams,
+				system: [
+					{
+						type: 'text',
+						text: SYSTEM_PROMPT,
+						// Stable prefix — cached across every turn of every session.
+						cache_control: { type: 'ephemeral' },
+					},
+					// Everything volatile goes after the breakpoint, so saving a memory
+					// does not invalidate the cache for the whole conversation.
+					{ type: 'text', text: contextBlock },
+				],
+				tools: toolDefinitions,
+				messages: sendable,
+			},
+			{ signal: controller.signal },
+		);
 
 		// Text produced in *this* iteration, so it can become one ordered segment
 		// before the tools it introduces — `assistantText` is the whole turn.
 		let iterationText = '';
 
-		for await (const event of stream) {
-			if (event.type !== 'content_block_delta') continue;
-			if (event.delta.type === 'text_delta') {
-				assistantText += event.delta.text;
-				iterationText += event.delta.text;
-				emit({ type: 'text_delta', text: event.delta.text });
-			} else if (event.delta.type === 'thinking_delta') {
-				emit({ type: 'thinking_delta', text: event.delta.thinking });
+		// Usage as the stream reports it, because an aborted call never reaches
+		// finalMessage(). Tokens spent before the abort were still spent, and a
+		// stop that quietly zeroed the bill would be the wrong kind of free.
+		// Its own shape rather than Anthropic.Usage: the delta event reports every
+		// field as nullable, and only these three are ever billed.
+		let liveUsage: TurnUsage | null = null;
+
+		let interrupted = false;
+
+		try {
+			for await (const event of stream) {
+				if (options.shouldStop?.()) {
+					interrupted = true;
+					controller.abort();
+					break;
+				}
+				if (event.type === 'message_start') {
+					liveUsage = {
+						inputTokens: event.message.usage.input_tokens ?? 0,
+						outputTokens: event.message.usage.output_tokens ?? 0,
+						cacheReadTokens: event.message.usage.cache_read_input_tokens ?? 0,
+					};
+				} else if (event.type === 'message_delta' && liveUsage) {
+					liveUsage.outputTokens = event.usage.output_tokens ?? liveUsage.outputTokens;
+				} else if (event.type === 'content_block_delta') {
+					if (event.delta.type === 'text_delta') {
+						assistantText += event.delta.text;
+						iterationText += event.delta.text;
+						emit({ type: 'text_delta', text: event.delta.text });
+					} else if (event.delta.type === 'thinking_delta') {
+						emit({ type: 'thinking_delta', text: event.delta.thinking });
+					}
+				}
 			}
+		} catch (error) {
+			// An abort surfaces as a rejection here, which is expected. Anything
+			// else is a real failure and belongs to the caller.
+			if (!interrupted) throw error;
+		}
+
+		usageByModel[stepModel] ??= { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 };
+
+		if (interrupted) {
+			if (liveUsage) {
+				addUsage(usage, liveUsage);
+				addUsage(usageByModel[stepModel], liveUsage);
+			}
+			// Whatever the model managed to say is kept, as a complete message.
+			// The half-formed tool call it was building is not — it never ran, and
+			// a dangling tool_use block would make the next turn a 400.
+			if (iterationText.trim()) {
+				segments.push({ kind: 'text', text: iterationText });
+				const partial: Anthropic.MessageParam = { role: 'assistant', content: iterationText };
+				messages.push(partial);
+				newMessages.push(partial);
+			}
+			stopped = true;
+			exhausted = false;
+			break;
 		}
 
 		const message = await stream.finalMessage();
 		stopReason = message.stop_reason;
 		accumulateUsage(usage, message.usage);
-
-		usageByModel[stepModel] ??= { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 };
 		accumulateUsage(usageByModel[stepModel], message.usage);
 
 		const assistantMessage: Anthropic.MessageParam = {
@@ -287,6 +358,27 @@ export async function runAgentTurn(options: RunOptions): Promise<RunResult> {
 		newMessages.push(resultMessage);
 	}
 
+	// A stop between a tool result and the model's reply leaves the conversation
+	// ending on a user message. The next turn would then send two user messages
+	// back to back, which the API rejects — so close the gap here.
+	if (stopped) {
+		stopReason = 'stopped';
+		const last = newMessages[newMessages.length - 1];
+		if (!last || last.role !== 'assistant') {
+			const marker: Anthropic.MessageParam = {
+				role: 'assistant',
+				content: '[Stopped by the user before I could use this.]',
+			};
+			messages.push(marker);
+			newMessages.push(marker);
+		}
+
+		const note = 'Stopped. Everything done so far is saved — send another message to carry on.';
+		assistantText += (assistantText.endsWith('\n') || assistantText === '' ? '' : '\n\n') + note;
+		segments.push({ kind: 'text', text: note });
+		emit({ type: 'text_delta', text: `\n\n${note}` });
+	}
+
 	// Hitting the ceiling mid-task used to end the turn with no explanation: the
 	// last thing on screen was a tool call, and nothing said why nothing followed.
 	if (exhausted) {
@@ -314,6 +406,13 @@ export async function runAgentTurn(options: RunOptions): Promise<RunResult> {
 		usageByModel,
 		stopReason,
 	};
+}
+
+/** Fold one already-normalised total into another. */
+function addUsage(total: TurnUsage, part: TurnUsage): void {
+	total.inputTokens += part.inputTokens;
+	total.outputTokens += part.outputTokens;
+	total.cacheReadTokens += part.cacheReadTokens;
 }
 
 function accumulateUsage(total: TurnUsage, usage: Anthropic.Usage): void {

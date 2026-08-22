@@ -180,6 +180,18 @@ sessionRoutes.post('/:id/messages', async (c) => {
 	});
 });
 
+/**
+ * POST /api/sessions/:id/stop — ask the running turn to wind up.
+ *
+ * Separate from the streaming request on purpose. That one is parked inside the
+ * session object for the length of the turn, so the only way to reach the turn
+ * is a second request into the same object.
+ */
+sessionRoutes.post('/:id/stop', async (c) => {
+	const stub = sessionStub(c.env, c.get('user').id, c.req.param('id'));
+	return c.json(await stub.requestStop());
+});
+
 /** POST /api/sessions/:id/browser — drive the container's browser. */
 sessionRoutes.post('/:id/browser', async (c) => {
 	const action = await readJson<{ type?: string }>(c.req.raw);
