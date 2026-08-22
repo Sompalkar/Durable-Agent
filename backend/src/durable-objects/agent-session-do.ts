@@ -65,6 +65,15 @@ import type { WorkspaceDO } from './workspace-do';
  * attached, and it competes for the same context as the code itself.
  */
 /** Matches the signed link's lifetime, so a stored preview never outlives it. */
+/**
+ * Ceiling on replayable events for one turn.
+ *
+ * Text is folded into one entry, so this counts tool calls and results — a turn
+ * capped at twelve steps cannot come close. It exists so a bug cannot turn a
+ * long turn into an unbounded buffer in a single-threaded object.
+ */
+const MAX_REPLAY_EVENTS = 2_000;
+
 const PREVIEW_TTL_MS = 3_600_000;
 
 const REPO_RECALL_LIMIT = 25;
@@ -106,6 +115,22 @@ export class AgentSessionDO extends DurableObject<Env> {
 	 * object, and lands while the turn is parked awaiting the model.
 	 */
 	private stopRequested = false;
+
+	/**
+	 * The current turn, replayable.
+	 *
+	 * A browser that reloads mid-turn used to lose the turn entirely: the events
+	 * only ever existed in the response body it just dropped. Keeping them here
+	 * means a new connection can be handed everything that has happened so far
+	 * and then carry on live.
+	 *
+	 * In memory, deliberately. This is worth exactly as long as the turn lasts,
+	 * and an object that restarts has no turn left to replay.
+	 */
+	private turnEvents: AgentEvent[] = [];
+
+	/** Connections watching the current turn, besides the one that started it. */
+	private watchers = new Set<(event: AgentEvent) => void>();
 
 	constructor(ctx: DurableObjectState, env: Env) {
 		super(ctx, env);
@@ -354,6 +379,7 @@ export class AgentSessionDO extends DurableObject<Env> {
 			effort: this.effort(),
 			runtime: this.runtime(),
 			preview: this.preview(),
+			running: this.running,
 		};
 	}
 
@@ -485,6 +511,9 @@ export class AgentSessionDO extends DurableObject<Env> {
 		if (request.method === 'POST' && url.pathname === '/shell') {
 			return this.openShell(request);
 		}
+		if (request.method === 'GET' && url.pathname === '/attach') {
+			return this.attach();
+		}
 		if (request.method !== 'POST' || url.pathname !== '/run') {
 			return new Response('Not found', { status: 404 });
 		}
@@ -518,6 +547,7 @@ export class AgentSessionDO extends DurableObject<Env> {
 
 		this.running = true;
 		this.stopRequested = false;
+		this.turnEvents = [];
 		const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
 		this.ctx.waitUntil(this.streamTurn(userMessage, writable));
 
@@ -543,6 +573,87 @@ export class AgentSessionDO extends DurableObject<Env> {
 	 * absent a stored `sandboxId` there is no container, so there is nothing to
 	 * ask and no provider to wake by asking.
 	 */
+	/**
+	 * Keep an event for replay, and hand it to anyone watching.
+	 *
+	 * Text arrives one delta at a time, so it is folded into the previous entry
+	 * rather than stored as thousands of them. Thinking is dropped: it is the
+	 * largest thing on the wire and the least useful to replay, since by the time
+	 * anyone reconnects the thought it summarises is already over.
+	 */
+	private record(event: AgentEvent): void {
+		if (event.type !== 'thinking_delta') {
+			const last = this.turnEvents[this.turnEvents.length - 1];
+			if (event.type === 'text_delta' && last?.type === 'text_delta') {
+				// Replaced rather than mutated: the same object is sitting in the
+				// live stream's queue, and appending to it there would send the
+				// text twice.
+				this.turnEvents[this.turnEvents.length - 1] = {
+					type: 'text_delta',
+					text: last.text + event.text,
+				};
+			} else if (this.turnEvents.length < MAX_REPLAY_EVENTS) {
+				this.turnEvents.push(event);
+			}
+		}
+
+		for (const watcher of this.watchers) {
+			try {
+				watcher(event);
+			} catch {
+				// A dead connection must not take the turn down with it.
+			}
+		}
+	}
+
+	/**
+	 * Attach a second connection to the turn already running.
+	 *
+	 * Replays what has happened, then follows along. This is what makes a reload
+	 * survivable: the turn never depended on the browser being there, but until
+	 * now there was no way back to it.
+	 */
+	private attach(): Response {
+		const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
+		const writer = writable.getWriter();
+		const encoder = new TextEncoder();
+
+		let flushing: Promise<void> = Promise.resolve();
+		const send = (event: AgentEvent) => {
+			flushing = flushing.then(async () => {
+				await writer.write(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+			});
+		};
+
+		// Snapshot before subscribing, so nothing arrives twice and nothing
+		// slips through the gap between the two.
+		const replay = [...this.turnEvents];
+		const watcher = (event: AgentEvent) => {
+			send(event);
+			if (event.type === 'turn_end' || event.type === 'error') {
+				this.watchers.delete(watcher);
+				void flushing.then(() => writer.close().catch(() => {}));
+			}
+		};
+
+		if (this.running) {
+			this.watchers.add(watcher);
+			for (const event of replay) send(event);
+		} else {
+			// Nothing to follow. Replaying anyway would leave the browser waiting
+			// for an end event that already happened.
+			void flushing.then(() => writer.close().catch(() => {}));
+		}
+
+		return new Response(readable, {
+			headers: {
+				'Content-Type': 'text/event-stream; charset=utf-8',
+				'Cache-Control': 'no-cache, no-transform',
+				Connection: 'keep-alive',
+			},
+		});
+	}
+
 	/**
 	 * Ask the running turn to stop at its next safe point.
 	 *
@@ -922,6 +1033,7 @@ export class AgentSessionDO extends DurableObject<Env> {
 
 		this.running = true;
 		this.stopRequested = false;
+		this.turnEvents = [];
 		try {
 			const result = await this.executeTurn(prompt, trigger, () => {});
 			return { text: result.text, ok: true };
@@ -973,6 +1085,7 @@ export class AgentSessionDO extends DurableObject<Env> {
 		// would only exist in the stream, and reopening the session would lose the
 		// running app the user was looking at.
 		const observe = (event: AgentEvent) => {
+			this.record(event);
 			if (event.type === 'preview_ready') {
 				this.setMeta(
 					'preview',
