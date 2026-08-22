@@ -27,6 +27,7 @@ import {
 	isValidModel,
 } from '../agent/models';
 import { createSandbox, type SandboxProvider } from '../agent/sandbox';
+import { recordForReplay } from '../agent/replay';
 import { DEFAULT_RUNTIME, isRuntime, keepsSandboxWarm, type Runtime } from '../agent/runtime';
 import type { SandboxStatus, SessionPreview, ShellEvent } from '../types';
 import { SandboxWorkspace } from '../agent/workspace/sandbox-workspace';
@@ -65,15 +66,6 @@ import type { WorkspaceDO } from './workspace-do';
  * attached, and it competes for the same context as the code itself.
  */
 /** Matches the signed link's lifetime, so a stored preview never outlives it. */
-/**
- * Ceiling on replayable events for one turn.
- *
- * Text is folded into one entry, so this counts tool calls and results — a turn
- * capped at twelve steps cannot come close. It exists so a bug cannot turn a
- * long turn into an unbounded buffer in a single-threaded object.
- */
-const MAX_REPLAY_EVENTS = 2_000;
-
 const PREVIEW_TTL_MS = 3_600_000;
 
 const REPO_RECALL_LIMIT = 25;
@@ -575,27 +567,9 @@ export class AgentSessionDO extends DurableObject<Env> {
 	 */
 	/**
 	 * Keep an event for replay, and hand it to anyone watching.
-	 *
-	 * Text arrives one delta at a time, so it is folded into the previous entry
-	 * rather than stored as thousands of them. Thinking is dropped: it is the
-	 * largest thing on the wire and the least useful to replay, since by the time
-	 * anyone reconnects the thought it summarises is already over.
 	 */
 	private record(event: AgentEvent): void {
-		if (event.type !== 'thinking_delta') {
-			const last = this.turnEvents[this.turnEvents.length - 1];
-			if (event.type === 'text_delta' && last?.type === 'text_delta') {
-				// Replaced rather than mutated: the same object is sitting in the
-				// live stream's queue, and appending to it there would send the
-				// text twice.
-				this.turnEvents[this.turnEvents.length - 1] = {
-					type: 'text_delta',
-					text: last.text + event.text,
-				};
-			} else if (this.turnEvents.length < MAX_REPLAY_EVENTS) {
-				this.turnEvents.push(event);
-			}
-		}
+		recordForReplay(this.turnEvents, event);
 
 		for (const watcher of this.watchers) {
 			try {
