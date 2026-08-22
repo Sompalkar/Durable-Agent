@@ -20,6 +20,7 @@ const MAX_HEIGHT = 200;
 
 export function Composer({
   streaming,
+  stopping,
   onSend,
   onStop,
   disabled,
@@ -27,6 +28,8 @@ export function Composer({
   controls,
 }: {
   streaming: boolean;
+  /** A stop was asked for and the turn is winding up. */
+  stopping?: boolean;
   onSend: (message: string) => void;
   onStop: () => void;
   disabled?: boolean;
@@ -111,10 +114,13 @@ export function Composer({
           {streaming ? (
             <button
               onClick={onStop}
-              className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-line bg-raised px-3.5 text-[13px] font-medium text-ink transition-colors hover:border-line-strong hover:bg-hover"
+              disabled={stopping}
+              className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-line bg-raised px-3.5 text-[13px] font-medium text-ink transition-colors hover:border-line-strong hover:bg-hover disabled:cursor-default disabled:text-ink-faint disabled:hover:border-line disabled:hover:bg-raised"
             >
               <StopIcon className="h-3.5 w-3.5" />
-              Stop
+              {/* The turn is allowed to finish the step it is on, so this can sit
+                  here for a few seconds. Saying so beats looking wedged. */}
+              {stopping ? "Stopping…" : "Stop"}
             </button>
           ) : (
             <button

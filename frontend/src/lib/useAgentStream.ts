@@ -44,6 +44,8 @@ interface StreamCallbacks {
 
 export interface AgentStream {
   streaming: boolean;
+  /** A stop has been asked for and the turn has not wound up yet. */
+  stopping: boolean;
   assistantText: string;
   thinkingText: string;
   activities: ToolActivity[];
@@ -51,9 +53,16 @@ export interface AgentStream {
   segments: TurnSegment[];
   error: string | null;
   send: (message: string) => Promise<void>;
-  stop: () => void;
+  stop: () => Promise<void>;
   dismissError: () => void;
 }
+
+/**
+ * How long to wait for a stopped turn to end itself before dropping the
+ * connection. A tool already executing is allowed to finish, so the wait is
+ * bounded by that, not by the model.
+ */
+const STOP_GRACE_MS = 15_000;
 
 /**
  * One piece of a turn, in the order it happened.
@@ -91,8 +100,10 @@ export function useAgentStream(
   const [activities, setActivities] = useState<ToolActivity[]>([]);
   const [segments, setSegments] = useState<TurnSegment[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [stopping, setStopping] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
+  const stopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Read inside the stream loop without making `send` depend on render state.
   const textRef = useRef("");
   const activitiesRef = useRef<ToolActivity[]>([]);
@@ -247,6 +258,7 @@ export function useAgentStream(
       abortRef.current = controller;
       reset();
       setError(null);
+      setStopping(false);
       setStreaming(true);
 
       try {
@@ -283,21 +295,48 @@ export function useAgentStream(
           );
         }
       } finally {
+        if (stopTimerRef.current) clearTimeout(stopTimerRef.current);
+        stopTimerRef.current = null;
         setStreaming(false);
+        setStopping(false);
         abortRef.current = null;
       }
     },
     [applyEvent, reset, sessionId, streaming],
   );
 
-  const stop = useCallback(() => {
-    abortRef.current?.abort();
-  }, []);
+  /**
+   * Ask the server to end the turn, rather than hanging up on it.
+   *
+   * Dropping the connection stops nothing: the turn keeps calling the model and
+   * spending money, and everything already on screen is thrown away because the
+   * completion never arrives. Asking instead means the turn finishes itself and
+   * the partial work lands in the transcript like any other turn.
+   */
+  const stop = useCallback(async () => {
+    if (!abortRef.current) return;
+    setStopping(true);
+
+    // The last resort, for a turn parked inside a long-running tool. Hanging up
+    // is worse than waiting, so it is a fallback and not the mechanism.
+    stopTimerRef.current = setTimeout(() => {
+      abortRef.current?.abort();
+    }, STOP_GRACE_MS);
+
+    try {
+      const { stopping: accepted } = await api.stopTurn(sessionId);
+      // Nothing was running on the server, so there is nothing to wait for.
+      if (!accepted) abortRef.current?.abort();
+    } catch {
+      abortRef.current?.abort();
+    }
+  }, [sessionId]);
 
   const dismissError = useCallback(() => setError(null), []);
 
   return {
     streaming,
+    stopping,
     assistantText,
     thinkingText,
     activities,
