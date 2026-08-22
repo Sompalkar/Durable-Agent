@@ -98,6 +98,12 @@ export interface SessionSummary {
 	/** Model and effort this session runs on. Changeable per session. */
 	model: string;
 	effort: string;
+	/**
+	 * Whether a turn is in flight right now. A browser that reopens the session
+	 * uses this to reattach to it rather than showing an idle conversation with
+	 * work quietly happening behind it.
+	 */
+	running: boolean;
 }
 
 export interface SessionPreview {

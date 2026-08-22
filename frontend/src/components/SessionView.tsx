@@ -8,7 +8,7 @@
  * component is presentational.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { classNames } from "@/lib/format";
 import type {
@@ -269,6 +269,22 @@ export function SessionView({ sessionId }: { sessionId: string }) {
     onProposals: useCallback((next: Proposal[]) => setProposals(next), []),
     onPlan: useCallback((next: PlanStep[]) => setPlan(next), []),
   });
+
+  /**
+   * Rejoin a turn that was already running when this session was opened.
+   *
+   * The turn belongs to the Durable Object, not to the tab that started it, so
+   * a reload never stopped it — it only stopped anyone watching. Tried once per
+   * session: `resume` changes identity as the stream starts and stops, and
+   * without the guard that alone would restart it forever.
+   */
+  const resume = stream.resume;
+  const resumedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!session?.running || resumedRef.current === sessionId) return;
+    resumedRef.current = sessionId;
+    void resume();
+  }, [session?.running, sessionId, resume]);
 
   // An issue becomes a draft, not a turn. It arrives with a counter so picking
   // the same issue twice still refills the box.

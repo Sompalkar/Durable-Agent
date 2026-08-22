@@ -239,6 +239,11 @@ export interface SessionSummary extends SessionListItem {
   /** Model and effort this session runs on. Changeable per session. */
   model: string;
   effort: string;
+  /**
+   * Whether a turn is in flight. Reopening a session with one running reattaches
+   * to it rather than showing an idle conversation with work happening behind it.
+   */
+  running: boolean;
 }
 
 /** One entry in the model picker, with the prices that drive the cost meter. */

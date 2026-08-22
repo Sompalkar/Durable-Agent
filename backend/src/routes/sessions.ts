@@ -181,6 +181,30 @@ sessionRoutes.post('/:id/messages', async (c) => {
 });
 
 /**
+ * GET /api/sessions/:id/stream — follow a turn that is already running.
+ *
+ * The turn belongs to the session object, not to the request that started it,
+ * so a browser that reloaded (or a second tab) can pick it back up. Replays
+ * what has happened so far, then streams the rest. Closes immediately when
+ * nothing is running.
+ */
+sessionRoutes.get('/:id/stream', async (c) => {
+	const stub = sessionStub(c.env, c.get('user').id, c.req.param('id'));
+	const response = await stub.fetch('http://session/attach');
+
+	if (!response.body) throw new ApiError(500, 'Failed to attach to the turn.');
+
+	return new Response(response.body, {
+		headers: {
+			'Content-Type': 'text/event-stream; charset=utf-8',
+			'Cache-Control': 'no-cache, no-transform',
+			Connection: 'keep-alive',
+			'X-Accel-Buffering': 'no',
+		},
+	});
+});
+
+/**
  * POST /api/sessions/:id/stop — ask the running turn to wind up.
  *
  * Separate from the streaming request on purpose. That one is parked inside the
