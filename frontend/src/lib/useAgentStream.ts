@@ -53,6 +53,8 @@ export interface AgentStream {
   segments: TurnSegment[];
   error: string | null;
   send: (message: string) => Promise<void>;
+  /** Rejoin a turn that is already running, after a reload or in a second tab. */
+  resume: () => Promise<void>;
   stop: () => Promise<void>;
   dismissError: () => void;
 }
@@ -250,10 +252,16 @@ export function useAgentStream(
     }
   }, [reset]);
 
-  const send = useCallback(
-    async (message: string) => {
-      if (streaming) return;
-
+  /**
+   * Read one turn to its end, from whichever connection opened it.
+   *
+   * Starting a turn and rejoining one differ only in how the stream is opened.
+   * Everything after that — the events, the completion, the teardown — has to
+   * behave identically, so it lives here once rather than in two places that
+   * drift.
+   */
+  const consume = useCallback(
+    async (open: (signal: AbortSignal) => Promise<Response>) => {
       const controller = new AbortController();
       abortRef.current = controller;
       reset();
@@ -262,29 +270,8 @@ export function useAgentStream(
       setStreaming(true);
 
       try {
-        const response = await fetch(api.messagesUrl(sessionId), {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...(readSessionToken() ? { Authorization: `Bearer ${readSessionToken()}` } : {}),
-          },
-          // Hand-rolled rather than routed through `api`, because this one
-          // reads a stream instead of a JSON body — but it still needs the
-          // session cookie, so the Worker knows whose session to run.
-          credentials: "include",
-          body: JSON.stringify({ message }),
-          signal: controller.signal,
-        });
-
-        if (!response.ok || !response.body) {
-          const payload = await response.json().catch(() => null);
-          throw new Error(
-            payload && typeof payload === "object" && "error" in payload
-              ? String((payload as { error: unknown }).error)
-              : `The agent could not start (status ${response.status}).`,
-          );
-        }
-
+        const response = await open(controller.signal);
+        if (!response.body) return;
         await readEventStream(response.body, applyEvent);
       } catch (cause) {
         if (controller.signal.aborted) {
@@ -302,17 +289,67 @@ export function useAgentStream(
         abortRef.current = null;
       }
     },
-    [applyEvent, reset, sessionId, streaming],
+    [applyEvent, reset],
+  );
+
+  const send = useCallback(
+    async (message: string) => {
+      if (streaming) return;
+
+      await consume(async (signal) => {
+        const response = await fetch(api.messagesUrl(sessionId), {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(readSessionToken() ? { Authorization: `Bearer ${readSessionToken()}` } : {}),
+          },
+          // Hand-rolled rather than routed through `api`, because this one
+          // reads a stream instead of a JSON body — but it still needs the
+          // session cookie, so the Worker knows whose session to run.
+          credentials: "include",
+          body: JSON.stringify({ message }),
+          signal,
+        });
+
+        if (!response.ok || !response.body) {
+          const payload = await response.json().catch(() => null);
+          throw new Error(
+            payload && typeof payload === "object" && "error" in payload
+              ? String((payload as { error: unknown }).error)
+              : `The agent could not start (status ${response.status}).`,
+          );
+        }
+        return response;
+      });
+    },
+    [consume, sessionId, streaming],
   );
 
   /**
-   * Ask the server to end the turn, rather than hanging up on it.
+   * Pick a running turn back up.
    *
-   * Dropping the connection stops nothing: the turn keeps calling the model and
-   * spending money, and everything already on screen is thrown away because the
-   * completion never arrives. Asking instead means the turn finishes itself and
-   * the partial work lands in the transcript like any other turn.
+   * The turn lives in the session object, not in the request that started it,
+   * so closing the tab never stopped it — it only stopped anyone watching. The
+   * server replays what has happened before streaming the rest, which is why
+   * this can render a turn it did not start.
    */
+  const resume = useCallback(async () => {
+    if (streaming) return;
+
+    await consume(async (signal) => {
+      const response = await fetch(api.streamUrl(sessionId), {
+        headers: {
+          ...(readSessionToken() ? { Authorization: `Bearer ${readSessionToken()}` } : {}),
+        },
+        credentials: "include",
+        signal,
+      });
+      // Nothing to rejoin is the ordinary case, not an error worth showing.
+      if (!response.ok) throw new Error("That turn has already finished.");
+      return response;
+    });
+  }, [consume, sessionId, streaming]);
+
   const stop = useCallback(async () => {
     if (!abortRef.current) return;
     setStopping(true);
@@ -343,6 +380,7 @@ export function useAgentStream(
     segments,
     error,
     send,
+    resume,
     stop,
     dismissError,
   };

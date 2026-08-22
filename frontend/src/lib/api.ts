@@ -572,6 +572,11 @@ export const api = {
     return `${BASE_URL}/api/sessions/${id}/messages`;
   },
 
+  /** URL for attaching to a turn already in flight. */
+  streamUrl(id: string): string {
+    return `${BASE_URL}/api/sessions/${id}/stream`;
+  },
+
   /** URL for the interactive shell, consumed by `useShell`. */
   shellUrl(id: string): string {
     return `${BASE_URL}/api/sessions/${id}/shell`;
