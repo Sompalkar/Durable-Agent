@@ -97,6 +97,16 @@ export class AgentSessionDO extends DurableObject<Env> {
 	/** Guards against two turns running in the same session at once. */
 	private running = false;
 
+	/**
+	 * Set by requestStop() and read by the turn between steps.
+	 *
+	 * In memory rather than in storage, which is exactly right: it only means
+	 * anything to the turn currently in flight, and an object that restarts has
+	 * no turn left to stop. A stop arrives as a separate request into this same
+	 * object, and lands while the turn is parked awaiting the model.
+	 */
+	private stopRequested = false;
+
 	constructor(ctx: DurableObjectState, env: Env) {
 		super(ctx, env);
 		this.migrate();
@@ -507,6 +517,7 @@ export class AgentSessionDO extends DurableObject<Env> {
 		}
 
 		this.running = true;
+		this.stopRequested = false;
 		const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
 		this.ctx.waitUntil(this.streamTurn(userMessage, writable));
 
@@ -532,6 +543,20 @@ export class AgentSessionDO extends DurableObject<Env> {
 	 * absent a stored `sandboxId` there is no container, so there is nothing to
 	 * ask and no provider to wake by asking.
 	 */
+	/**
+	 * Ask the running turn to stop at its next safe point.
+	 *
+	 * Nothing is torn down here. The turn ends itself, which is what keeps the
+	 * partial work: the transcript is written, the usage is reported, and the
+	 * files the agent already changed stay changed. A tool already executing is
+	 * left to finish rather than killed halfway through a write.
+	 */
+	async requestStop(): Promise<{ stopping: boolean }> {
+		if (!this.running) return { stopping: false };
+		this.stopRequested = true;
+		return { stopping: true };
+	}
+
 	async sandboxStatus(): Promise<SandboxStatus> {
 		const sandboxId = this.getMeta('sandboxId');
 		const persistent = keepsSandboxWarm(this.runtime());
@@ -896,6 +921,7 @@ export class AgentSessionDO extends DurableObject<Env> {
 		}
 
 		this.running = true;
+		this.stopRequested = false;
 		try {
 			const result = await this.executeTurn(prompt, trigger, () => {});
 			return { text: result.text, ok: true };
@@ -1043,6 +1069,7 @@ export class AgentSessionDO extends DurableObject<Env> {
 			skills,
 			messages: this.loadContext(),
 			emit: observe,
+			shouldStop: () => this.stopRequested,
 		});
 
 		for (const message of result.newMessages) {
