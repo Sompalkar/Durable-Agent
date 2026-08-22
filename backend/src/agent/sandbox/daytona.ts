@@ -49,6 +49,16 @@ const WORKDIR = '/home/daytona/workspace';
  */
 const MARKER = '/tmp/.agent-run-marker';
 
+/**
+ * Records which commit the workspace holds, inside the container itself.
+ *
+ * A provider instance lives for one turn, so an in-memory flag cannot tell a
+ * reused container that it is already checked out — and re-cloning wipes
+ * `node_modules` along with everything else. Keeping the answer on the
+ * container's own disk is the only place both turns can see it.
+ */
+const CHECKOUT_MARKER = '/tmp/.agent-checkout-sha';
+
 /** Where a streamed command's output and exit code are collected. */
 const LOG_FILE = '/tmp/.agent-run.log';
 const EXIT_FILE = '/tmp/.agent-run.exit';
@@ -65,7 +75,17 @@ const EXIT_FILE = '/tmp/.agent-run.exit';
  * closely, then progressively cheaper as a command turns out to be long. A
  * five-minute command costs about 25 polls instead of 250.
  */
-const POLL_START_MS = 1_000;
+/**
+ * First poll delay.
+ *
+ * Was 1s, which set the floor for every interactive command: `ls` finishes in
+ * single-digit milliseconds and then sat waiting for the next tick. Most of a
+ * hand-typed command's latency was this number.
+ *
+ * The backoff below still protects a long build — by a minute in, polls are
+ * seconds apart — so the extra calls are spent only where somebody is watching.
+ */
+const POLL_START_MS = 120;
 const POLL_MAX_MS = 15_000;
 const POLL_BACKOFF = 1.35;
 
@@ -87,7 +107,24 @@ export class DaytonaSandbox implements SandboxProvider {
 		this.sandboxId = config.sandboxId;
 	}
 
+	/**
+	 * Run a command, booting a replacement sandbox once if the stored one has
+	 * been reclaimed. A user whose container was idled out should see their
+	 * command run, not an error telling them to try again.
+	 */
 	async run(options: RunOptions): Promise<CommandResult> {
+		try {
+			return await this.runOnce(options);
+		} catch (error) {
+			if (!(error instanceof SandboxError) || !/reclaimed after being idle/.test(error.message)) {
+				throw error;
+			}
+			// `exec` has already forgotten the dead id, so this boots a fresh one.
+			return this.runOnce(options);
+		}
+	}
+
+	private async runOnce(options: RunOptions): Promise<CommandResult> {
 		const sandboxId = await this.ensureSandbox();
 
 		// Checkout first, and crucially *before* the change-detection clock starts.
@@ -138,8 +175,8 @@ export class DaytonaSandbox implements SandboxProvider {
 
 		return {
 			exitCode: result.exitCode,
-			stdout: truncate(result.stdout),
-			stderr: truncate(result.stderr),
+			stdout: truncate(result.stdout, options.maxOutputChars),
+			stderr: truncate(result.stderr, options.maxOutputChars),
 			changedFiles: await this.collectChanges(sandboxId),
 			durationMs,
 		};
@@ -239,6 +276,15 @@ export class DaytonaSandbox implements SandboxProvider {
 	private async ensureCheckout(sandboxId: string, repo: RepoCheckout): Promise<void> {
 		if (this.checkedOut === repo.commitSha) return;
 
+		// A container carried over from a previous turn may already hold exactly
+		// this commit, with dependencies installed on top. Asking it is one cheap
+		// call; getting it wrong costs a re-clone and a re-install.
+		const existing = await this.exec(sandboxId, `cat ${CHECKOUT_MARKER} 2>/dev/null || true`, 30);
+		if (existing.stdout.trim() === repo.commitSha) {
+			this.checkedOut = repo.commitSha;
+			return;
+		}
+
 		const script = [
 			`rm -rf ${WORKDIR}`,
 			`mkdir -p ${WORKDIR}`,
@@ -249,6 +295,9 @@ export class DaytonaSandbox implements SandboxProvider {
 			`git checkout -q FETCH_HEAD`,
 			// Token out of the remote as soon as it is no longer needed.
 			`git remote set-url origin ${shellQuote(stripCredentials(repo.cloneUrl))}`,
+			// Written last, so a checkout interrupted halfway is not mistaken for a
+			// finished one by the next turn.
+			`printf '%s' ${shellQuote(repo.commitSha)} > ${CHECKOUT_MARKER}`,
 		].join(' && ');
 
 		const result = await this.exec(sandboxId, script, 300);
@@ -259,6 +308,36 @@ export class DaytonaSandbox implements SandboxProvider {
 		}
 
 		this.checkedOut = repo.commitSha;
+	}
+
+	/**
+	 * A signed URL, not the standard one.
+	 *
+	 * The standard preview URL needs an `x-daytona-preview-token` header, which a
+	 * browser cannot attach to a link the user clicks. A signed URL carries its
+	 * own authentication, so it works by being opened.
+	 */
+	async previewUrl(port: number, expiresInSeconds: number): Promise<string | null> {
+		if (!this.sandboxId) return null;
+		if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+			throw new SandboxError(`Port ${port} is not a valid port number.`);
+		}
+
+		const response = await fetch(
+			`${this.config.apiUrl}/sandbox/${this.sandboxId}/ports/${port}/signed-preview-url` +
+				`?expiresInSeconds=${Math.min(86_400, Math.max(60, expiresInSeconds))}`,
+			{ headers: this.headers() },
+		);
+
+		if (!response.ok) {
+			throw new SandboxError(
+				`Could not get a preview URL for port ${port} (${response.status}). ` +
+					'Check that something is listening on it.',
+			);
+		}
+
+		const body = (await response.json()) as { url?: string; signedUrl?: string };
+		return body.url ?? body.signedUrl ?? null;
 	}
 
 	async dispose(): Promise<void> {
@@ -276,6 +355,16 @@ export class DaytonaSandbox implements SandboxProvider {
 
 	// --------------------------------------------------------------- private
 
+	/**
+	 * True for the errors a stopped or deleted sandbox produces.
+	 *
+	 * A stored id outlives the container it names — the provider reaps an idle
+	 * sandbox, and the next turn is still holding its id. Treating that as a
+	 * fatal error strands the session permanently; the right answer is to notice
+	 * and boot a replacement.
+	 */
+	private static readonly GONE = /failed to resolve container IP|not found|sandbox.*(stopped|destroyed|archived)/i;
+
 	private async ensureSandbox(): Promise<string> {
 		if (this.sandboxId) return this.sandboxId;
 
@@ -286,6 +375,9 @@ export class DaytonaSandbox implements SandboxProvider {
 			// the Worker dies mid-turn and never gets to clean up.
 			autoStopInterval: this.config.autoStopMinutes,
 		};
+		// The snapshot carries the container's size as well as its contents:
+		// Daytona refuses cpu/memory/disk on the same request, and there is
+		// always a snapshot, so `DAYTONA_SNAPSHOT` is how a sandbox is sized.
 		if (this.config.snapshot) body.snapshot = this.config.snapshot;
 
 		const response = await fetch(`${this.config.apiUrl}/sandbox`, {
@@ -325,9 +417,18 @@ export class DaytonaSandbox implements SandboxProvider {
 		);
 
 		if (!response.ok) {
-			throw new SandboxError(
-				`Sandbox command failed (${response.status}): ${await response.text()}`,
-			);
+			const detail = await response.text();
+			if (DaytonaSandbox.GONE.test(detail)) {
+				// Forget it so the next call boots a fresh one rather than retrying
+				// against a container that no longer exists.
+				this.sandboxId = undefined;
+				this.checkedOut = undefined;
+				throw new SandboxError(
+					'The sandbox for this session was reclaimed after being idle. ' +
+						'Run the command again and a fresh one will be started.',
+				);
+			}
+			throw new SandboxError(`Sandbox command failed (${response.status}): ${detail}`);
 		}
 
 		// Field names have varied across Daytona versions, so accept the
@@ -474,8 +575,6 @@ function byteLengthOf(value: string): number {
 	return new TextEncoder().encode(value).length;
 }
 
-function truncate(value: string): string {
-	return value.length <= MAX_OUTPUT_CHARS
-		? value
-		: `${value.slice(0, MAX_OUTPUT_CHARS)}\n… output truncated.`;
+function truncate(value: string, limit = MAX_OUTPUT_CHARS): string {
+	return value.length <= limit ? value : `${value.slice(0, limit)}\n… output truncated.`;
 }

@@ -14,95 +14,125 @@
  */
 @theme {
   /*
-   * Default palette = dark. Espresso surfaces with a coral/clay accent —
-   * the same family Anthropic's own brand lives in. Surfaces step up in
-   * lightness as they come forward; borders are hairline until something
-   * genuinely needs an edge.
+   * Default palette = dark. Near-monochrome graphite.
+   *
+   * The restraint is the point. Colour is expensive: the more surfaces carry
+   * it, the less any of it means. Everything structural here is neutral, and
+   * the accent is spent only on the agent's own marks and small live state.
+   * The primary action is not accent-coloured at all — it is maximum contrast
+   * (see `ink` on `canvas`), which reads as more confident than any hue.
+   *
+   * Four surfaces, ordered back-to-front: `sidebar` sits behind everything,
+   * `canvas` is the reading surface, `panel` is chrome that frames it, and
+   * `raised` is anything that needs to look picked up off the page (inputs,
+   * cards, the active row). `hover` is only ever a transient state.
    */
-  --color-canvas: #131110;
-  --color-panel: #1b1814;
-  --color-raised: #24211b;
-  --color-hover: #2e2a23;
+  --color-canvas: #0c0c0e;
+  --color-sidebar: #08080a;
+  --color-panel: #0f0f11;
+  --color-raised: #17171a;
+  --color-hover: #1f1f23;
 
-  --color-line: #302b25;
-  --color-line-strong: #47413a;
+  --color-line: #1c1c1f;
+  --color-line-strong: #2c2c31;
 
   /* Three text levels. Anything below `faint` is unreadable — do not add one. */
-  --color-ink: #f5f2ec;
-  --color-ink-soft: #b8afa4;
-  --color-ink-faint: #877e71;
+  --color-ink: #f7f7f8;
+  --color-ink-soft: #a1a1a6;
+  --color-ink-faint: #74747a;
 
-  /* Coral/clay. Active state, the agent's own marks, primary actions. */
-  --color-accent: #e07a58;
-  --color-accent-hover: #ef8e6d;
-  --color-accent-dim: #41271b;
-  --color-accent-ink: #1a0c06;
+  /* Amber. The agent's own marks, active state, inline highlights. Used on a
+     handful of elements per screen, never as a background wash. */
+  --color-accent: #e8a13c;
+  --color-accent-hover: #f2b055;
+  --color-accent-dim: #2a2013;
+  --color-accent-ink: #171104;
 
-  /* Status. Desaturated to sit inside a warm palette without vibrating. */
-  --color-positive: #88ba79;
-  --color-negative: #e57e70;
-  --color-caution: #e3af50;
-  --color-info: #86b3c6;
+  /* Status. Muted so a passing test does not outshout the content. */
+  --color-positive: #5aa86f;
+  --color-negative: #d16a5e;
+  --color-caution: #cf9a3c;
+  --color-info: #6b93c4;
 
   --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-geist-mono), ui-monospace, monospace;
 
   --radius-panel: 0.875rem;
+
+  /*
+   * Elevation. Two steps only: `soft` for things resting on the page (the
+   * composer, the active sidebar row) and `pop` for things that have genuinely
+   * left it (menus, drawers). A third step would be a third meaning nobody can
+   * name.
+   */
+  --shadow-soft: 0 1px 2px rgb(0 0 0 / 0.16), 0 4px 16px -8px rgb(0 0 0 / 0.24);
+  --shadow-pop: 0 8px 32px -8px rgb(0 0 0 / 0.5), 0 2px 8px -2px rgb(0 0 0 / 0.3);
 }
 
 /*
  * Light theme.
  *
- * Applied globally via data-theme on <html>. Same warm family as the dark
- * palette — paper in daylight, not a cold white sheet. The clay accent is
- * nudged deeper so it holds contrast against the light surfaces. Every Tailwind
- * utility resolves to var(--color-*), so overriding these is enough to flip the
- * whole surface.
+ * Applied globally via data-theme on <html>. Paper-white reading surface with
+ * the surrounding chrome a half-step down in warmth, so the conversation is
+ * the brightest thing on screen and the rails recede without needing borders
+ * to hold them apart. Every Tailwind utility resolves to var(--color-*), so
+ * overriding these flips the whole app.
  */
 [data-theme="light"] {
-  --color-canvas: #f5f2ea;
-  --color-panel: #fffdf8;
-  --color-raised: #eee9df;
-  --color-hover: #e5ded1;
+  /* Canvas is a shade off pure white so that `panel` cards still read as
+     lifted off it without needing a heavy border. */
+  --color-canvas: #fcfcfb;
+  --color-sidebar: #f6f6f3;
+  --color-panel: #ffffff;
+  --color-raised: #f2f2ef;
+  --color-hover: #eaeae6;
 
-  --color-line: #e5ddce;
-  --color-line-strong: #cfc6b6;
+  --color-line: #eaeae6;
+  --color-line-strong: #d6d6d0;
 
-  --color-ink: #221e17;
-  --color-ink-soft: #635b4f;
-  --color-ink-faint: #90887a;
+  --color-ink: #131314;
+  --color-ink-soft: #57575c;
+  --color-ink-faint: #7d7d83;
 
-  --color-accent: #bf5b36;
-  --color-accent-hover: #a84c29;
-  --color-accent-dim: #f3ddcd;
-  --color-accent-ink: #fffaf6;
+  --color-accent: #95590c;
+  --color-accent-hover: #7d4a07;
+  --color-accent-dim: #f7ead4;
+  --color-accent-ink: #ffffff;
 
-  --color-positive: #4c8b3c;
-  --color-negative: #bf483d;
-  --color-caution: #a9781a;
-  --color-info: #397991;
+  --color-positive: #3f7d52;
+  --color-negative: #b4453a;
+  --color-caution: #926510;
+  --color-info: #35618f;
+
+  /* Shadows have to be much lighter on white or they read as smudges. */
+  --shadow-soft: 0 1px 2px rgb(16 16 20 / 0.05), 0 4px 14px -8px rgb(16 16 20 / 0.12);
+  --shadow-pop: 0 8px 32px -8px rgb(16 16 20 / 0.16), 0 2px 8px -2px rgb(16 16 20 / 0.08);
 }
 
 /* Explicit dark wrapper so a data-theme="dark" subtree stays dark even if a
    light ancestor exists. Values mirror the @theme defaults. */
 [data-theme="dark"] {
-  --color-canvas: #131110;
-  --color-panel: #1b1814;
-  --color-raised: #24211b;
-  --color-hover: #2e2a23;
-  --color-line: #302b25;
-  --color-line-strong: #47413a;
-  --color-ink: #f5f2ec;
-  --color-ink-soft: #b8afa4;
-  --color-ink-faint: #877e71;
-  --color-accent: #e07a58;
-  --color-accent-hover: #ef8e6d;
-  --color-accent-dim: #41271b;
-  --color-accent-ink: #1a0c06;
-  --color-positive: #88ba79;
-  --color-negative: #e57e70;
-  --color-caution: #e3af50;
-  --color-info: #86b3c6;
+  --color-canvas: #0c0c0e;
+  --color-sidebar: #08080a;
+  --color-panel: #0f0f11;
+  --color-raised: #17171a;
+  --color-hover: #1f1f23;
+  --color-line: #1c1c1f;
+  --color-line-strong: #2c2c31;
+  --color-ink: #f7f7f8;
+  --color-ink-soft: #a1a1a6;
+  --color-ink-faint: #74747a;
+  --color-accent: #e8a13c;
+  --color-accent-hover: #f2b055;
+  --color-accent-dim: #2a2013;
+  --color-accent-ink: #171104;
+  --color-positive: #5aa86f;
+  --color-negative: #d16a5e;
+  --color-caution: #cf9a3c;
+  --color-info: #6b93c4;
+
+  --shadow-soft: 0 1px 2px rgb(0 0 0 / 0.16), 0 4px 16px -8px rgb(0 0 0 / 0.24);
+  --shadow-pop: 0 8px 32px -8px rgb(0 0 0 / 0.5), 0 2px 8px -2px rgb(0 0 0 / 0.3);
 }
 
 /* Smooth the base surface when the theme flips. Interactive elements keep
@@ -113,6 +143,18 @@ body {
   transition:
     background-color 0.3s ease,
     color 0.3s ease;
+}
+
+/*
+ * Mobile browsers report `100%`/`100vh` as the height with the URL bar hidden,
+ * so a full-height app shell ends up taller than the visible viewport and the
+ * composer sits below the fold. `dvh` tracks the chrome as it collapses.
+ */
+@supports (height: 100dvh) {
+  html,
+  body {
+    height: 100dvh;
+  }
 }
 
 body {
@@ -142,14 +184,34 @@ body {
   background-color: var(--color-ink-faint);
 }
 
+/* For short horizontal strips (the rail's tab row) where a visible track would
+   be thicker than the thing it scrolls. */
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
 ::selection {
   background-color: var(--color-accent-dim);
   color: var(--color-ink);
 }
 
-:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 2px;
+/*
+ * Global keyboard focus ring.
+ *
+ * Declared inside `base` on purpose. Unlayered rules beat every layered one no
+ * matter how specific, so an unlayered `:focus-visible` here would silently win
+ * over `focus-visible:outline-none` at the call site — which is exactly what a
+ * control that draws its own focus state (the composer, whose card border
+ * carries it) needs to be able to ask for.
+ */
+@layer base {
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
 }
 
 /* Streaming caret shown at the end of in-flight assistant text. */
@@ -222,52 +284,19 @@ body {
   animation: sweep 2.4s linear infinite;
 }
 
-/* Landing page: a slow float for the floating stat chips. */
-@keyframes float-y {
-  0%,
-  100% {
-    transform: translateY(0);
-  }
-  50% {
-    transform: translateY(-6px);
-  }
-}
-.float-y {
-  animation: float-y 5s ease-in-out infinite;
-}
-
-/* Landing page: staged fade-rise, larger travel than the in-app version. */
-@keyframes rise-in {
-  from {
-    opacity: 0;
-    transform: translateY(14px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
-.rise-in {
-  animation: rise-in 0.6s cubic-bezier(0.22, 1, 0.36, 1) both;
-}
-
-/* Faint dotted grid used behind the hero. Uses the current line colour so it
-   works in both themes. */
-.dot-grid {
-  background-image: radial-gradient(
-    var(--color-line-strong) 1px,
-    transparent 1px
-  );
-  background-size: 22px 22px;
-}
+/*
+ * No decorative backdrops, float animations, or entrance transitions here on
+ * purpose. Patterned grids, glow gradients and staggered fade-ups are the
+ * house style of generated landing pages; this one gets its structure from
+ * hairlines and its motion only where motion carries meaning (a streaming
+ * caret, a running indicator).
+ */
 
 @media (prefers-reduced-motion: reduce) {
   .caret::after,
   .animate-in,
   .pulse-dot,
-  .sweep,
-  .float-y,
-  .rise-in {
+  .sweep {
     animation: none;
   }
 }

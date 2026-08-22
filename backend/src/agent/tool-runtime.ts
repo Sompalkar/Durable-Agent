@@ -11,9 +11,17 @@
 
 import type { BrainDO, MemoryCategory } from '../durable-objects/brain-do';
 import type { Cadence, SchedulerDO } from '../durable-objects/scheduler-do';
-import type { WorkspaceDO } from '../durable-objects/workspace-do';
+import type { AgentWorkspace } from './workspace/types';
 import type { AgentEvent, PlanStatus, PlanStep, Proposal, ToolOutcome } from '../types';
 import { GitHubClient } from '../github/client';
+import { captureScreenshot } from './screenshot';
+import {
+	listProcesses,
+	readProcessLog,
+	startProcess,
+	stopProcess,
+	type BackgroundProcess,
+} from './processes';
 import type { RepoCheckout, SandboxProvider } from './sandbox';
 
 /** Everything a tool might need, assembled once per turn. */
@@ -21,7 +29,16 @@ export interface ToolContext {
 	sessionId: string;
 	/** The account this turn runs on behalf of. Scopes every object it touches. */
 	userId: string;
-	workspace: DurableObjectStub<WorkspaceDO>;
+	/**
+	 * Where this session's files live. A Durable Object today; a container when
+	 * the session runs on the sandbox runtime. The tools do not know which.
+	 */
+	workspace: AgentWorkspace;
+	/**
+	 * True when `workspace` is the container itself, so shell commands skip
+	 * copying files in and out rather than writing them on top of themselves.
+	 */
+	filesLiveInSandbox: boolean;
 	brain: DurableObjectStub<BrainDO>;
 	/**
 	 * Memory scoped to the attached repository, when there is one.
@@ -120,6 +137,9 @@ const MAX_STREAMED_CHARS = 200_000;
  * every future read of the transcript.
  */
 const MAX_PERSISTED_OUTPUT_CHARS = 8_000;
+
+/** How long a preview link stays valid. Long enough to demo, short enough to expire. */
+const PREVIEW_TTL_SECONDS = 3_600;
 
 const HANDLERS: Record<string, ToolHandler> = {
 	// ----------------------------------------------------------------- files
@@ -423,6 +443,226 @@ const HANDLERS: Record<string, ToolHandler> = {
 		);
 	},
 
+	// ------------------------------------------------------------- processes
+
+	async start_process(input, context) {
+		const { sandbox, repo } = context;
+		if (!sandbox) throw new Error('No sandbox is configured, so processes are unavailable.');
+
+		const { process, earlyOutput } = await startProcess(
+			sandbox,
+			{
+				name: requireString(input.name, 'name'),
+				command: requireString(input.command, 'command'),
+				// Bounded: a long wait holds the whole turn open for nothing.
+				readyMs: Math.min(20_000, Math.max(1_000, Number(input.wait_ms) || 3_000)),
+			},
+			repo?.checkout ?? null,
+		);
+
+		// Fetched here rather than left to a second tool call: a dev server the user
+		// cannot open is not much of a dev server.
+		const link = process.port ? await previewLink(sandbox, process.port) : null;
+		if (process.port && link) {
+			context.emit({ type: 'preview_ready', port: process.port, url: link });
+		}
+		const where = process.port
+			? `Listening on port ${process.port}.` +
+				(link
+					? ` The user can open it at ${link} — give them that link.`
+					: ` Inside the sandbox it is http://localhost:${process.port}.`)
+			: 'No port was detected yet. Read its output if you expected one.';
+
+		// Stated here, not only in the schema: a result is read more carefully.
+		const lifetime = context.filesLiveInSandbox
+			? 'It will keep running between turns.'
+			: 'This session is on the on-demand runtime, so the container — and this process — ' +
+				'will be destroyed when the turn ends. Use it now, in this turn.';
+
+		return {
+			ok: true,
+			content: [`Started "${process.name}" (pid ${process.pid}).`, where, lifetime, earlyOutput ? `Early output:\n${earlyOutput}` : '']
+				.filter(Boolean)
+				.join('\n\n'),
+			summary: `started ${process.name}${process.port ? ` on :${process.port}` : ''}`,
+			...(earlyOutput ? { output: earlyOutput } : {}),
+		};
+	},
+
+	async preview_url(input, context) {
+		const { sandbox } = context;
+		if (!sandbox) throw new Error('No sandbox is configured, so there is nothing to preview.');
+		if (!sandbox.previewUrl) {
+			throw new Error(`The ${sandbox.name} sandbox cannot expose ports publicly.`);
+		}
+
+		const port = requireNumber(input.port, 'port');
+		const url = await sandbox.previewUrl(port, PREVIEW_TTL_SECONDS);
+		if (!url) {
+			throw new Error(
+				'No sandbox is running yet. Start a server first, then ask for its preview URL.',
+			);
+		}
+
+		// Emitted as well as returned: the UI opens it directly, so the user does
+		// not have to copy a link out of the reply.
+		context.emit({ type: 'preview_ready', port, url });
+
+		return ok(
+			`The app on port ${port} is available at ${url}\n\n` +
+				`The user can already see it — it is open in their Preview panel. ` +
+				`It expires in ${PREVIEW_TTL_SECONDS / 3600} hour(s).`,
+			`preview on :${port}`,
+		);
+	},
+
+	async list_processes(_input, context) {
+		const { sandbox, repo } = context;
+		if (!sandbox) throw new Error('No sandbox is configured, so processes are unavailable.');
+
+		const processes = await listProcesses(sandbox, repo?.checkout ?? null);
+		if (processes.length === 0) {
+			return ok('No processes have been started in this sandbox.', 'no processes');
+		}
+		return ok(processes.map(describeProcess).join('\n'), `${processes.length} process(es)`);
+	},
+
+	async read_process_output(input, context) {
+		const { sandbox, repo } = context;
+		if (!sandbox) throw new Error('No sandbox is configured, so processes are unavailable.');
+
+		const name = requireString(input.name, 'name');
+		const log = await readProcessLog(
+			sandbox,
+			repo?.checkout ?? null,
+			name,
+			Number(input.lines) || undefined,
+		);
+
+		return {
+			ok: true,
+			content: log ? `Output from "${name}":\n\n${tail(log)}` : `"${name}" has produced no output yet.`,
+			summary: `read ${name} output`,
+			output: log ? keepTail(log, MAX_PERSISTED_OUTPUT_CHARS) : `${name}: no output yet`,
+		};
+	},
+
+	async stop_process(input, context) {
+		const { sandbox, repo } = context;
+		if (!sandbox) throw new Error('No sandbox is configured, so processes are unavailable.');
+
+		const name = requireString(input.name, 'name');
+		const stopped = await stopProcess(sandbox, repo?.checkout ?? null, name);
+		return stopped
+			? ok(`Stopped "${name}".`, `stopped ${name}`)
+			: ok(`"${name}" had already exited; cleaned it up.`, `${name} already stopped`);
+	},
+
+	// --------------------------------------------------------------- browser
+
+	async screenshot(input, context) {
+		const { sandbox, workspace, repo } = context;
+		if (!sandbox) throw new Error('No sandbox is configured, so screenshots are unavailable.');
+
+		const url = requireString(input.url, 'url');
+		if (!/^https?:\/\//i.test(url)) {
+			throw new Error('The url must start with http:// or https://.');
+		}
+
+		const shot = await captureScreenshot(
+			sandbox,
+			{
+				url,
+				fullPage: input.full_page === true,
+				// Bounded so a mistaken value cannot hold the turn open for minutes.
+				settleMs: Math.min(10_000, Math.max(0, Number(input.wait_ms) || 1_000)),
+			},
+			repo?.checkout ?? null,
+		);
+
+		// Saved so the image outlives the container the agent viewed it in.
+		const path = `/screenshots/${screenshotName(url)}.png.b64`;
+		// Storage is a convenience; failing to save must not lose the capture.
+		await workspace.write(path, shot.base64, `screenshot of ${url}`).catch(() => {});
+
+		const errors = shot.consoleErrors.slice(0, 5);
+		const notes = [
+			`Screenshot of ${url} (${Math.round(shot.bytes / 1024)}KB), saved to ${path}.`,
+			errors.length > 0
+				? `The page logged ${shot.consoleErrors.length} console error(s):\n${errors.join('\n')}`
+				: 'The page logged no console errors.',
+		];
+
+		return {
+			ok: true,
+			content: notes.join('\n\n'),
+			summary: `screenshot of ${url}${errors.length > 0 ? `, ${errors.length} console error(s)` : ''}`,
+			image: { mediaType: 'image/png', base64: shot.base64 },
+		};
+	},
+
+	// ------------------------------------------------------------------- git
+
+	async git(input, context) {
+		const { sandbox, workspace, repo } = context;
+		if (!sandbox) throw new Error('No sandbox is configured, so git is unavailable.');
+		if (!repo) throw new Error('No repository is attached, so there is nothing to inspect.');
+
+		const requested = requireString(input.command, 'command');
+		const builder = GIT_COMMANDS[requested];
+		if (!builder) {
+			throw new Error(
+				`Unknown git command "${requested}". Available: ${Object.keys(GIT_COMMANDS).join(', ')}.`,
+			);
+		}
+
+		// Shell-quoted rather than validated, so a name with a space survives.
+		const path = typeof input.path === 'string' ? input.path.replace(/^\/+/, '').trim() : '';
+		if (builder.requiresPath && !path) {
+			throw new Error(`The "${requested}" command needs a "path".`);
+		}
+
+		// Edits must be on disk for a diff to mean anything.
+		// Nothing to push when the workspace is the container.
+		const files = context.filesLiveInSandbox ? [] : await workspace.list();
+		const changed = files
+			.filter((file) => context.changedPaths.has(file.path))
+			.filter((file) => context.syncedVersions.get(file.path) !== file.version);
+		const contents = await Promise.all(changed.map((file) => workspace.read(file.path)));
+		for (const file of changed) context.syncedVersions.set(file.path, file.version);
+
+		const result = await sandbox.run({
+			command: builder.build(path),
+			files: contents.map((file) => ({ path: file.path, content: file.content })),
+			timeoutSeconds: 60,
+			repo: repo.checkout,
+		});
+
+		if (result.exitCode !== 0) {
+			return {
+				ok: false,
+				content: `git ${requested} failed (exit ${result.exitCode}):\n${tail(result.stderr || result.stdout)}`,
+				summary: `git ${requested} failed`,
+			};
+		}
+
+		const output = result.stdout.trim();
+		if (!output) {
+			// An empty diff is a real answer, and confusing to receive blank.
+			return ok(
+				`git ${requested} produced no output — nothing has changed relative to the base commit.`,
+				`git ${requested}: no changes`,
+			);
+		}
+
+		return {
+			ok: true,
+			content: `$ git ${requested}${path ? ` ${path}` : ''}\n\n${tail(output)}`,
+			summary: `git ${requested}`,
+			output: keepTail(output, MAX_PERSISTED_OUTPUT_CHARS),
+		};
+	},
+
 	// --------------------------------------------------------------- sandbox
 
 	async run_command(input, context, toolUseId) {
@@ -442,7 +682,8 @@ const HANDLERS: Record<string, ToolHandler> = {
 		// Either way the Durable Object stays the source of truth: the container
 		// is destroyed at the end of the turn, and the record of what changed is
 		// what survives.
-		const files = await workspace.list();
+		// Same reasoning: already in place on the sandbox runtime.
+		const files = context.filesLiveInSandbox ? [] : await workspace.list();
 
 		// Workspace paths are absolute ("/frontend/..."), but the shell starts in
 		// the repository root, where the matching path is relative. A leading
@@ -489,15 +730,21 @@ const HANDLERS: Record<string, ToolHandler> = {
 			setup: repo && input.install === true ? repo.installCommand : undefined,
 		});
 
-		for (const file of result.changedFiles.filter((file) => isAgentAuthored(file.path))) {
-			const record = await workspace.write(
-				file.path,
-				file.content,
+		// One call, not one per file: a build touching forty files would otherwise
+		// spend forty of the invocation's fifty subrequests writing them back.
+		const authored = result.changedFiles.filter((file) => isAgentAuthored(file.path));
+		if (authored.length > 0) {
+			await workspace.writeMany(
+				authored.map((file) => ({ path: file.path, content: file.content })),
 				`written by \`${command.slice(0, 40)}\``,
 			);
-			// The container already has this content, so do not send it back next time.
-			context.syncedVersions.set(record.path, record.version);
-			context.changedPaths.add(record.path);
+			for (const file of authored) {
+				const path = file.path.startsWith('/') ? file.path : `/${file.path}`;
+				// Version unknown here, so clear it: one re-read beats pushing a stale
+				// copy over a newer one.
+				context.syncedVersions.delete(path);
+				context.changedPaths.add(path);
+			}
 		}
 
 		const sections = [`$ ${command}`, `exit ${result.exitCode} · ${result.durationMs}ms`];
@@ -536,19 +783,23 @@ const HANDLERS: Record<string, ToolHandler> = {
 };
 
 /**
- * Directory names that only ever contain generated output.
- *
- * The sandbox already prunes these, so this is a second line of defence: a
- * provider whose change detection is slightly wrong must not be able to write a
- * build directory into the diff, because that diff becomes a pull request.
+ * Second line of defence — the sandbox prunes these too. A provider with
+ * slightly wrong change detection must not get a build directory into the diff,
+ * because that diff becomes a pull request.
  */
 const GENERATED_DIRECTORIES = new Set([
 	'node_modules', '.git', 'dist', 'build', 'out', '.next', '.nuxt',
 	'.turbo', '.cache', 'coverage', 'target', '__pycache__', '.venv', 'vendor',
 ]);
 
-/** True when a path looks like something a person would want to review. */
-function isAgentAuthored(path: string): boolean {
+/**
+ * True when a path looks like something a person would want to review.
+ *
+ * Exported because the interactive shell writes files back through the same
+ * filter — a `npm install` typed by hand should no more flood the workspace
+ * with `node_modules` than one the agent ran.
+ */
+export function isAgentAuthored(path: string): boolean {
 	if (/\.(tsbuildinfo|log|map)$/.test(path)) return false;
 	return !path.split('/').some((segment) => GENERATED_DIRECTORIES.has(segment));
 }
@@ -604,13 +855,58 @@ function truncate(content: string): string {
 
 /** Keep the last N characters — where compiler and test failures live. */
 /**
+ * An allow-list, not a pass-through. The agent already has a shell, so the value
+ * is that these are the right commands with the right flags every time.
+ * `--no-pager` matters — git otherwise blocks on a pager that does not exist.
+ */
+const GIT_COMMANDS: Record<string, { build: (path: string) => string; requiresPath?: boolean }> = {
+	// Porcelain is stable across git versions; the readable format is not.
+	status: { build: () => 'git --no-pager status --porcelain=v1 --untracked-files=all' },
+	diff: {
+		build: (path) =>
+			`git --no-pager diff --no-color${path ? ` -- ${quoteForShell(path)}` : ''}`,
+	},
+	diff_stat: { build: () => 'git --no-pager diff --no-color --stat' },
+	show: { build: (path) => `git --no-pager show HEAD:${quoteForShell(path)}`, requiresPath: true },
+	// Detached at a pinned commit, so `branch --show-current` prints nothing.
+	base: { build: () => "git --no-pager log -1 --format='%h %an %ad %s' --date=short" },
+};
+
+/** Best-effort preview link; a failure here must not fail the start it decorates. */
+async function previewLink(sandbox: SandboxProvider, port: number): Promise<string | null> {
+	if (!sandbox.previewUrl) return null;
+	return sandbox.previewUrl(port, PREVIEW_TTL_SECONDS).catch(() => null);
+}
+
+/** One line describing a process, for the model to read. */
+function describeProcess(process: BackgroundProcess): string {
+	const state = process.running ? 'running' : 'exited';
+	const port = process.port ? ` · port ${process.port}` : '';
+	return `${process.name}  [${state}, pid ${process.pid}${port}]  ${process.command}`;
+}
+
+/**
+ * From the URL, not a timestamp, so repeated shots of one page overwrite into a
+ * single file with history rather than littering near-identical images.
+ */
+function screenshotName(url: string): string {
+	const slug = url
+		.replace(/^https?:\/\//i, '')
+		.replace(/[^a-zA-Z0-9]+/g, '-')
+		.replace(/^-+|-+$/g, '')
+		.slice(0, 60);
+	return slug || 'page';
+}
+
+/** Single-quote for `sh`, escaping any embedded single quotes. */
+function quoteForShell(value: string): string {
+	return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
  * Rewrite a leading `cd /foo` to `cd foo` when `/foo` is a top-level workspace
- * directory.
- *
- * Deliberately narrow: only the first command in the string, only an absolute
- * path, and only when the first segment is a directory the workspace actually
- * has. Anything else is left exactly as written — `cd /tmp` and `cd /usr/bin`
- * mean what they say, and silently rewriting them would be worse than failing.
+ * directory. Narrow on purpose: `cd /tmp` and `cd /usr/bin` mean what they say,
+ * and silently rewriting those would be worse than failing.
  */
 export function rerootLeadingCd(command: string, paths: string[]): string {
 	const match = /^(\s*cd\s+)(\/[^\s;&|]+)/.exec(command);

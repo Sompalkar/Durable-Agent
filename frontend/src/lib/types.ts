@@ -63,6 +63,13 @@ export interface SessionListItem {
   messageCount: number;
 }
 
+export interface SessionPreview {
+  port: number;
+  url: string;
+  /** Signed links are time-limited, so a stale one has to be refreshed. */
+  expiresAt: number;
+}
+
 export interface SessionUsage {
   inputTokens: number;
   outputTokens: number;
@@ -106,6 +113,95 @@ export interface CommandRecord {
   durationMs: number;
 }
 
+/**
+ * One frame from the interactive shell.
+ *
+ * Separate from `AgentEvent`: these come from a command the user typed, and
+ * nothing in the transcript should react to them.
+ */
+export type ShellEvent =
+  | { type: "output"; chunk: string }
+  | {
+      type: "exit";
+      exitCode: number;
+      durationMs: number;
+      /** Paths written back into the workspace, so the file tree can refresh. */
+      changedFiles: string[];
+    }
+  | { type: "error"; message: string };
+
+/** One thing the browser panel can ask the container's browser to do. */
+export type BrowserAction =
+  | { type: "status" }
+  | { type: "navigate"; url: string }
+  | { type: "click"; x: number; y: number }
+  | { type: "type"; text: string }
+  | { type: "key"; key: string }
+  | { type: "scroll"; dy: number }
+  | { type: "back" }
+  | { type: "forward" }
+  | { type: "reload" };
+
+export interface BrowserView {
+  url: string;
+  title: string;
+  /** Base64 JPEG of the viewport. */
+  image: string;
+  consoleErrors: string[];
+}
+
+/** Viewport the container's browser renders at; clicks map into this. */
+export const BROWSER_VIEWPORT = { width: 1280, height: 800 };
+
+/** The container's desktop, as the panel sees it. */
+export interface DesktopInfo {
+  running: boolean;
+  ready: boolean;
+  port: number;
+  /** Signed noVNC URL, present once it is serving. */
+  url: string | null;
+}
+
+/** A long-running process inside the container. */
+export interface SandboxProcess {
+  name: string;
+  command: string;
+  pid: number;
+  running: boolean;
+  /** The port it appears to be listening on, when one could be determined. */
+  port: number | null;
+}
+
+/** What the session's container is doing right now. */
+export interface SandboxStatus {
+  running: boolean;
+  /** Whether the runtime keeps it alive between turns. */
+  persistent: boolean;
+  startedAt: number | null;
+  processes: SandboxProcess[];
+  /** Every port in LISTEN, including servers started by hand in the shell. */
+  ports: ListeningPort[];
+}
+
+/** A port the container is serving, and what is behind it. */
+export interface ListeningPort {
+  port: number;
+  pid: number;
+  command: string;
+  /** Set when the agent started it, so the row can also stop it. */
+  name: string | null;
+}
+
+/** One finished command in the shell's scrollback. */
+export interface ShellEntry {
+  id: number;
+  command: string;
+  output: string;
+  /** Null while the command is still running. */
+  exitCode: number | null;
+  durationMs: number;
+}
+
 /** A pull request this session opened and is now watching. */
 export interface WatchedPullRequest {
   number: number;
@@ -133,9 +229,21 @@ export interface SessionSummary extends SessionListItem {
   plan: PlanStep[];
   turnsUsed: number;
   turnLimit: number | null;
+  /**
+   * Where this session's work happens: "durable" rents a container per command,
+   * "sandbox" keeps one alive between turns.
+   */
+  runtime: string;
+  /** The port the sandbox is currently serving, if any. */
+  preview: SessionPreview | null;
   /** Model and effort this session runs on. Changeable per session. */
   model: string;
   effort: string;
+  /**
+   * Whether a turn is in flight. Reopening a session with one running reattaches
+   * to it rather than showing an idle conversation with work happening behind it.
+   */
+  running: boolean;
 }
 
 /** One entry in the model picker, with the prices that drive the cost meter. */
@@ -324,6 +432,8 @@ export type AgentEvent =
   | { type: "proposals"; proposals: Proposal[] }
   | { type: "plan"; plan: PlanStep[] }
   | { type: "command_output"; id: string; chunk: string }
+  /** Something in the sandbox is serving and can be opened in the browser. */
+  | { type: "preview_ready"; port: number; url: string }
   | { type: "turn_end"; stopReason: string | null; usage: TurnUsage }
   | { type: "error"; message: string };
 

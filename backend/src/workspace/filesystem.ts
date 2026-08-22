@@ -384,7 +384,7 @@ function byteLength(value: string): number {
  * lines are compared as empty, since a model will not reliably reproduce the
  * whitespace on a line that renders as nothing.
  */
-function matchIgnoringIndentation(
+export function matchIgnoringIndentation(
 	content: string,
 	target: string,
 ): { start: number; end: number; indentDelta: number } | 'ambiguous' | null {
@@ -444,7 +444,7 @@ function indentOf(line: string): number {
  * Shift every line by `delta` columns, preserving the relative indentation the
  * caller wrote. Outdenting never eats non-whitespace.
  */
-function reindent(text: string, delta: number): string {
+export function reindent(text: string, delta: number): string {
 	if (delta === 0) return text;
 	return text
 		.split('\n')
@@ -461,7 +461,7 @@ function reindent(text: string, delta: number): string {
  * Point at the region of the file that looks most like what was asked for, so a
  * failed edit tells the caller what the file actually says.
  */
-function describeNearest(content: string, target: string): string {
+export function describeNearest(content: string, target: string): string {
 	const firstLine = target.split('\n').find((line) => line.trim() !== '')?.trim();
 	if (!firstLine) return 'The target text was empty.';
 

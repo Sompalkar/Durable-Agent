@@ -26,7 +26,22 @@ import {
 	isValidEffort,
 	isValidModel,
 } from '../agent/models';
-import { createSandbox } from '../agent/sandbox';
+import { createSandbox, type SandboxProvider } from '../agent/sandbox';
+import { recordForReplay } from '../agent/replay';
+import { DEFAULT_RUNTIME, isRuntime, keepsSandboxWarm, type Runtime } from '../agent/runtime';
+import type { SandboxStatus, SessionPreview, ShellEvent } from '../types';
+import { SandboxWorkspace } from '../agent/workspace/sandbox-workspace';
+import { isAgentAuthored } from '../agent/tool-runtime';
+import { listListeningPorts, listProcesses, stopProcess } from '../agent/processes';
+import { runBrowserAction, type BrowserAction, type BrowserView } from '../agent/browser';
+import {
+	DESKTOP_PORT,
+	desktopStatus,
+	openOnDesktop,
+	startDesktop,
+	stopDesktop,
+	type DesktopStatus,
+} from '../agent/desktop';
 import type { CommandRecord, RepoContext, ToolContext } from '../agent/tool-runtime';
 import type {
 	AgentEvent,
@@ -50,7 +65,17 @@ import type { WorkspaceDO } from './workspace-do';
  * Tighter than personal recall: repo knowledge is only relevant while a repo is
  * attached, and it competes for the same context as the code itself.
  */
+/** Matches the signed link's lifetime, so a stored preview never outlives it. */
+const PREVIEW_TTL_MS = 3_600_000;
+
 const REPO_RECALL_LIMIT = 25;
+
+/**
+ * Ceiling for one hand-typed command.
+ * Longer than the agent's own, because a person watching output is willing to
+ * wait for an install in a way an autonomous loop should not be.
+ */
+const SHELL_TIMEOUT_SECONDS = 180;
 
 interface MessageRow extends Record<string, SqlStorageValue> {
 	id: number;
@@ -72,6 +97,32 @@ interface TranscriptRow extends Record<string, SqlStorageValue> {
 export class AgentSessionDO extends DurableObject<Env> {
 	/** Guards against two turns running in the same session at once. */
 	private running = false;
+
+	/**
+	 * Set by requestStop() and read by the turn between steps.
+	 *
+	 * In memory rather than in storage, which is exactly right: it only means
+	 * anything to the turn currently in flight, and an object that restarts has
+	 * no turn left to stop. A stop arrives as a separate request into this same
+	 * object, and lands while the turn is parked awaiting the model.
+	 */
+	private stopRequested = false;
+
+	/**
+	 * The current turn, replayable.
+	 *
+	 * A browser that reloads mid-turn used to lose the turn entirely: the events
+	 * only ever existed in the response body it just dropped. Keeping them here
+	 * means a new connection can be handed everything that has happened so far
+	 * and then carry on live.
+	 *
+	 * In memory, deliberately. This is worth exactly as long as the turn lasts,
+	 * and an object that restarts has no turn left to replay.
+	 */
+	private turnEvents: AgentEvent[] = [];
+
+	/** Connections watching the current turn, besides the one that started it. */
+	private watchers = new Set<(event: AgentEvent) => void>();
 
 	constructor(ctx: DurableObjectState, env: Env) {
 		super(ctx, env);
@@ -318,7 +369,37 @@ export class AgentSessionDO extends DurableObject<Env> {
 			turnLimit: this.turnLimit(),
 			model: this.model(),
 			effort: this.effort(),
+			runtime: this.runtime(),
+			preview: this.preview(),
+			running: this.running,
 		};
+	}
+
+	/**
+	 * The last exposed port, dropped once its link has expired — or once the
+	 * container it pointed at is gone. A signed link outlives its sandbox by up
+	 * to an hour, and serving one after the sandbox is replaced shows the user a
+	 * 404 from the provider where their app used to be.
+	 */
+	private preview(): SessionPreview | null {
+		const raw = this.getMeta('preview');
+		if (!raw) return null;
+		try {
+			const { sandboxId, ...stored } = JSON.parse(raw) as SessionPreview & { sandboxId?: string };
+			if (sandboxId && sandboxId !== this.getMeta('sandboxId')) return null;
+			return stored.expiresAt > Date.now() ? stored : null;
+		} catch {
+			return null;
+		}
+	}
+
+	/**
+	 * Which runtime this session uses. Defaults to the cheap one — a user who has
+	 * not asked for a warm container should never be billed for one.
+	 */
+	private runtime(): Runtime {
+		const stored = this.getMeta('runtime');
+		return stored && isRuntime(stored) ? stored : DEFAULT_RUNTIME;
 	}
 
 	/** The model this session runs on. Falls back to the deployment default. */
@@ -336,8 +417,12 @@ export class AgentSessionDO extends DurableObject<Env> {
 		return isValidEffort(configured) ? configured : DEFAULT_EFFORT;
 	}
 
-	/** Switch model or effort mid-session — takes effect on the next turn. */
-	async configure(options: { model?: string; effort?: string }): Promise<SessionSummary> {
+	/** Switch model, effort or runtime mid-session — takes effect on the next turn. */
+	async configure(options: {
+		model?: string;
+		effort?: string;
+		runtime?: string;
+	}): Promise<SessionSummary> {
 		if (options.model !== undefined) {
 			if (!isSelectableModel(options.model)) throw new Error(`Unknown model: ${options.model}`);
 			this.setMeta('model', options.model);
@@ -346,7 +431,34 @@ export class AgentSessionDO extends DurableObject<Env> {
 			if (!isValidEffort(options.effort)) throw new Error(`Unknown effort: ${options.effort}`);
 			this.setMeta('effort', options.effort);
 		}
+		if (options.runtime !== undefined) {
+			if (!isRuntime(options.runtime)) throw new Error(`Unknown runtime: ${options.runtime}`);
+			// Dropping to the cheap runtime has to take effect now, not next turn.
+			// Otherwise a user turning it off keeps paying for the warm container
+			// until they happen to send another message.
+			if (!keepsSandboxWarm(options.runtime)) await this.disposeSandbox();
+			this.setMeta('runtime', options.runtime);
+		}
 		return this.summary();
+	}
+
+	/**
+	 * Destroy this session's container, if it has one.
+	 *
+	 * Safe to call when there is none. Failure is ignored on purpose: the
+	 * provider's own idle timeout will reap anything left behind, and a dead
+	 * container must never be the reason a turn reports an error.
+	 */
+	private async disposeSandbox(): Promise<void> {
+		const sandboxId = this.getMeta('sandboxId');
+		if (!sandboxId) return;
+		this.ctx.storage.sql.exec("DELETE FROM meta WHERE key = 'sandboxId'");
+		const sandbox = createSandbox(this.env, {
+			sessionId: this.getMeta('sessionId') ?? 'default',
+			sandboxId,
+			onSandboxCreated: () => {},
+		});
+		await sandbox?.dispose().catch(() => {});
 	}
 
 	async rename(title: string): Promise<SessionSummary> {
@@ -388,6 +500,12 @@ export class AgentSessionDO extends DurableObject<Env> {
 	 */
 	override async fetch(request: Request): Promise<Response> {
 		const url = new URL(request.url);
+		if (request.method === 'POST' && url.pathname === '/shell') {
+			return this.openShell(request);
+		}
+		if (request.method === 'GET' && url.pathname === '/attach') {
+			return this.attach();
+		}
 		if (request.method !== 'POST' || url.pathname !== '/run') {
 			return new Response('Not found', { status: 404 });
 		}
@@ -420,6 +538,8 @@ export class AgentSessionDO extends DurableObject<Env> {
 		}
 
 		this.running = true;
+		this.stopRequested = false;
+		this.turnEvents = [];
 		const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
 		this.ctx.waitUntil(this.streamTurn(userMessage, writable));
 
@@ -430,6 +550,438 @@ export class AgentSessionDO extends DurableObject<Env> {
 				Connection: 'keep-alive',
 			},
 		});
+	}
+
+	// ---------------------------------------------------- the user's container
+
+	/**
+	 * What the session's container is doing right now.
+	 *
+	 * Read from the container rather than from storage. A process list is only
+	 * true of the machine running it, and a cached copy would confidently
+	 * describe servers that died with a container an hour ago.
+	 *
+	 * `running: false` with no work done is the common case and costs nothing:
+	 * absent a stored `sandboxId` there is no container, so there is nothing to
+	 * ask and no provider to wake by asking.
+	 */
+	/**
+	 * Keep an event for replay, and hand it to anyone watching.
+	 */
+	private record(event: AgentEvent): void {
+		recordForReplay(this.turnEvents, event);
+
+		for (const watcher of this.watchers) {
+			try {
+				watcher(event);
+			} catch {
+				// A dead connection must not take the turn down with it.
+			}
+		}
+	}
+
+	/**
+	 * Attach a second connection to the turn already running.
+	 *
+	 * Replays what has happened, then follows along. This is what makes a reload
+	 * survivable: the turn never depended on the browser being there, but until
+	 * now there was no way back to it.
+	 */
+	private attach(): Response {
+		const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
+		const writer = writable.getWriter();
+		const encoder = new TextEncoder();
+
+		// Declared up front so both `send` and `watcher` can unsubscribe it.
+		const watcher = (event: AgentEvent) => {
+			send(event);
+			// The turn is over, so there is nothing left to follow.
+			if (event.type === 'turn_end' || event.type === 'error') detach();
+		};
+
+		const detach = () => {
+			this.watchers.delete(watcher);
+			void flushing.then(() => writer.close().catch(() => {}));
+		};
+
+		let flushing: Promise<void> = Promise.resolve();
+		const send = (event: AgentEvent) => {
+			flushing = flushing
+				.then(async () => {
+					await writer.write(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+				})
+				// A browser can close a tab mid-turn. Without this the failed write
+				// poisons the chain and the watcher keeps being handed events for
+				// the rest of the turn, failing every time.
+				.catch(() => {
+					this.watchers.delete(watcher);
+				});
+		};
+
+		if (this.running) {
+			// Subscribed before the snapshot is sent, so nothing that arrives in
+			// between is lost. Both go through the same ordered queue, so the
+			// replay still reaches the browser ahead of the live events.
+			this.watchers.add(watcher);
+			for (const event of [...this.turnEvents]) send(event);
+		} else {
+			// Nothing to follow. Replaying anyway would leave the browser waiting
+			// for an end event that already happened.
+			detach();
+		}
+
+		return new Response(readable, {
+			headers: {
+				'Content-Type': 'text/event-stream; charset=utf-8',
+				'Cache-Control': 'no-cache, no-transform',
+				Connection: 'keep-alive',
+			},
+		});
+	}
+
+	/**
+	 * Ask the running turn to stop at its next safe point.
+	 *
+	 * Nothing is torn down here. The turn ends itself, which is what keeps the
+	 * partial work: the transcript is written, the usage is reported, and the
+	 * files the agent already changed stay changed. A tool already executing is
+	 * left to finish rather than killed halfway through a write.
+	 */
+	async requestStop(): Promise<{ stopping: boolean }> {
+		if (!this.running) return { stopping: false };
+		this.stopRequested = true;
+		return { stopping: true };
+	}
+
+	async sandboxStatus(): Promise<SandboxStatus> {
+		const sandboxId = this.getMeta('sandboxId');
+		const persistent = keepsSandboxWarm(this.runtime());
+
+		if (!sandboxId) {
+			return { running: false, persistent, startedAt: null, processes: [], ports: [] };
+		}
+
+		const startedAt = Number(this.getMeta('sandboxStartedAt') ?? 0) || null;
+		const sandbox = createSandbox(this.env, {
+			sessionId: this.getMeta('sessionId') ?? 'default',
+			sandboxId,
+			keepWarm: persistent,
+		});
+		if (!sandbox) return { running: false, persistent, startedAt, processes: [], ports: [] };
+
+		try {
+			const [processes, listening] = await Promise.all([
+				listProcesses(sandbox, null),
+				// A port scan is the only way to see a server the user started from
+				// the shell, and it must not take the whole status down with it.
+				listListeningPorts(sandbox).catch(() => []),
+			]);
+
+			// A managed process carries a name, so its row can also stop it.
+			const named = new Map(
+				processes.filter((p) => p.running && p.port !== null).map((p) => [p.port as number, p.name]),
+			);
+			const ports = listening.map((entry) => ({ ...entry, name: named.get(entry.port) ?? null }));
+
+			return { running: true, persistent, startedAt, processes, ports };
+		} catch {
+			// The provider reaped it, or it never came back. Either way the id is
+			// stale, and keeping it would make every later call fail the same way.
+			this.ctx.storage.sql.exec("DELETE FROM meta WHERE key = 'sandboxId'");
+			return { running: false, persistent, startedAt: null, processes: [], ports: [] };
+		}
+	}
+
+	/**
+	 * Destroy the container now, without changing the runtime.
+	 *
+	 * The point of an always-on container is that it survives; the cost of one
+	 * is that it survives. This is the release valve — stop paying without
+	 * losing the session, which stays exactly where it was because the files and
+	 * the conversation were never in the container to begin with.
+	 */
+	async stopSandbox(): Promise<{ stopped: boolean }> {
+		const sandboxId = this.getMeta('sandboxId');
+		if (!sandboxId) return { stopped: false };
+
+		const sandbox = createSandbox(this.env, {
+			sessionId: this.getMeta('sessionId') ?? 'default',
+			sandboxId,
+			keepWarm: false,
+		});
+		await sandbox?.dispose().catch(() => {});
+		this.ctx.storage.sql.exec("DELETE FROM meta WHERE key IN ('sandboxId', 'sandboxStartedAt')");
+		// The preview pointed into the container that just went away.
+		this.ctx.storage.sql.exec("DELETE FROM meta WHERE key = 'preview'");
+		return { stopped: true };
+	}
+
+	/** Stop one background process, leaving the container up. */
+	async stopSandboxProcess(name: string): Promise<{ stopped: boolean }> {
+		const sandboxId = this.getMeta('sandboxId');
+		if (!sandboxId) return { stopped: false };
+
+		const sandbox = createSandbox(this.env, {
+			sessionId: this.getMeta('sessionId') ?? 'default',
+			sandboxId,
+			keepWarm: keepsSandboxWarm(this.runtime()),
+		});
+		if (!sandbox) return { stopped: false };
+		return { stopped: await stopProcess(sandbox, null, name).catch(() => false) };
+	}
+
+	/**
+	 * A fresh public link for a port inside the container.
+	 *
+	 * Per port rather than one per session: an app is usually a frontend and an
+	 * API, and being able to see only one of them is the wrong half as often as
+	 * not. Links are signed and expire, so this also serves as the refresh.
+	 */
+	async sandboxPreview(port: number): Promise<SessionPreview | null> {
+		const sandboxId = this.getMeta('sandboxId');
+		if (!sandboxId) return null;
+
+		const sandbox = createSandbox(this.env, {
+			sessionId: this.getMeta('sessionId') ?? 'default',
+			sandboxId,
+			keepWarm: keepsSandboxWarm(this.runtime()),
+		});
+		if (!sandbox?.previewUrl) return null;
+
+		const url = await sandbox.previewUrl(port, PREVIEW_TTL_MS / 1000).catch(() => null);
+		if (!url) return null;
+
+		const preview: SessionPreview = { port, url, expiresAt: Date.now() + PREVIEW_TTL_MS };
+		// Tagged with its container so a later read can tell it is stale.
+		this.setMeta('preview', JSON.stringify({ ...preview, sandboxId }));
+		return preview;
+	}
+
+	/** The desktop's state, plus a signed URL when it is serving. */
+	async desktop(): Promise<DesktopStatus & { url: string | null }> {
+		const sandbox = this.containerSandbox();
+		if (!sandbox) return { running: false, ready: false, port: DESKTOP_PORT, url: null };
+
+		const status = await desktopStatus(sandbox).catch(() => null);
+		if (!status?.ready) return { running: false, ready: false, port: DESKTOP_PORT, url: null };
+
+		return { ...status, url: await this.desktopUrl(sandbox) };
+	}
+
+	async startDesktop(): Promise<DesktopStatus & { url: string | null }> {
+		const sandbox = this.requireContainer();
+		const status = await startDesktop(sandbox);
+		return { ...status, url: await this.desktopUrl(sandbox) };
+	}
+
+	async stopDesktop(): Promise<{ stopped: true }> {
+		const sandbox = this.containerSandbox();
+		if (sandbox) await stopDesktop(sandbox);
+		return { stopped: true };
+	}
+
+	async openOnDesktop(url: string): Promise<void> {
+		await openOnDesktop(this.requireContainer(), url);
+	}
+
+	private async desktopUrl(sandbox: SandboxProvider): Promise<string | null> {
+		if (!sandbox.previewUrl) return null;
+		return sandbox.previewUrl(DESKTOP_PORT, PREVIEW_TTL_MS / 1000).catch(() => null);
+	}
+
+	/** A provider for the existing container, or null when there is none. */
+	private containerSandbox(): SandboxProvider | null {
+		if (!this.getMeta('sandboxId')) return null;
+		return createSandbox(this.env, {
+			sessionId: this.getMeta('sessionId') ?? 'default',
+			sandboxId: this.getMeta('sandboxId') ?? undefined,
+			keepWarm: keepsSandboxWarm(this.runtime()),
+		});
+	}
+
+	/** Same, but creates the container and insists on the right runtime. */
+	private requireContainer(): SandboxProvider {
+		if (!keepsSandboxWarm(this.runtime())) {
+			throw new Error(
+				'This needs a container that survives between actions. Switch this session to "Always on".',
+			);
+		}
+
+		const sandbox = createSandbox(this.env, {
+			sessionId: this.getMeta('sessionId') ?? 'default',
+			sandboxId: this.getMeta('sandboxId') ?? undefined,
+			keepWarm: true,
+			onSandboxCreated: (id) => {
+				this.setMeta('sandboxId', id);
+				this.setMeta('sandboxStartedAt', String(Date.now()));
+			},
+		});
+		if (!sandbox) throw new Error('No sandbox provider is configured on this deployment.');
+		return sandbox;
+	}
+
+	/** Drive the container's browser. Needs a container, so sandbox runtime only. */
+	async browser(action: BrowserAction): Promise<BrowserView> {
+		return runBrowserAction(this.requireContainer(), action);
+	}
+
+	// ------------------------------------------------------- the user's shell
+
+	/**
+	 * `POST /shell` with `{ "command": "..." }` — run one command in this
+	 * session's container and stream its output back as SSE.
+	 *
+	 * Deliberately limited to the `sandbox` runtime. On `durable` the container
+	 * is destroyed at the end of every turn, so each command would open a fresh
+	 * empty machine: `cd` would not persist, an install would be thrown away,
+	 * and nothing typed would relate to anything typed before. A shell whose
+	 * state resets between lines is not a shell, so it is refused with a reason
+	 * rather than offered in a form that misleads.
+	 */
+	private async openShell(request: Request): Promise<Response> {
+		if (!keepsSandboxWarm(this.runtime())) {
+			return Response.json(
+				{
+					error:
+						'A shell needs a container that survives between commands. Switch this session to the "Always on" runtime to use one.',
+					code: 'runtime_unsupported',
+				},
+				{ status: 409 },
+			);
+		}
+
+		// One container, one command at a time. Letting a hand-typed command run
+		// underneath the agent would have them writing the same files from two
+		// directions, and the loser would be whichever wrote first.
+		if (this.running) {
+			return Response.json(
+				{
+					error: 'The agent is working in this session. Wait for the turn to finish.',
+					code: 'turn_running',
+				},
+				{ status: 409 },
+			);
+		}
+
+		const body = (await request.json()) as { command?: unknown };
+		const command = typeof body.command === 'string' ? body.command.trim() : '';
+		if (!command) {
+			return Response.json({ error: '"command" must be a non-empty string.' }, { status: 400 });
+		}
+
+		const sandbox = createSandbox(this.env, {
+			sessionId: this.getMeta('sessionId') ?? 'default',
+			sandboxId: this.getMeta('sandboxId') ?? undefined,
+			keepWarm: true,
+			onSandboxCreated: (id) => {
+				this.setMeta('sandboxId', id);
+				this.setMeta('sandboxStartedAt', String(Date.now()));
+			},
+		});
+		if (!sandbox) {
+			return Response.json(
+				{
+					error: 'No sandbox provider is configured on this deployment.',
+					code: 'no_sandbox',
+				},
+				{ status: 409 },
+			);
+		}
+
+		const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
+		this.ctx.waitUntil(this.streamShell(sandbox, command, writable));
+
+		return new Response(readable, {
+			headers: {
+				'Content-Type': 'text/event-stream; charset=utf-8',
+				'Cache-Control': 'no-cache, no-transform',
+				Connection: 'keep-alive',
+			},
+		});
+	}
+
+	/**
+	 * Run one shell command, streaming output as it arrives.
+	 *
+	 * Writes back anything the command changed, through the same filter the
+	 * agent's own `run_command` uses — otherwise the Files panel would quietly
+	 * disagree with the container the user is typing into.
+	 */
+	private async streamShell(
+		sandbox: SandboxProvider,
+		command: string,
+		writable: WritableStream<Uint8Array>,
+	): Promise<void> {
+		const writer = writable.getWriter();
+		const encoder = new TextEncoder();
+
+		// Serialised through one promise chain so chunks cannot interleave, the
+		// same shape the turn stream uses.
+		let flushing: Promise<void> = Promise.resolve();
+		const send = (event: ShellEvent) => {
+			flushing = flushing.then(async () => {
+				await writer.write(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+			});
+		};
+
+		// Whether the provider streamed. Not every one can, and the fallback below
+		// depends on knowing — emitting the buffered output unconditionally prints
+		// everything twice on a provider that did stream.
+		let streamed = false;
+
+		try {
+			// Same reason as a turn: the first container a session is given has
+			// none of its files. `null` for the repository because the shell does
+			// no checkout — hydration is skipped anyway once the container has
+			// content of its own.
+			await new SandboxWorkspace(sandbox, this.workspaceStub(), null)
+				.hydrateFrom()
+				.catch(() => 0);
+
+			const result = await sandbox.run({
+				command,
+				// Empty on purpose: on this runtime the container already holds the
+				// workspace, so pushing files would overwrite what the shell just did.
+				files: [],
+				timeoutSeconds: SHELL_TIMEOUT_SECONDS,
+				onOutput: (chunk) => {
+					streamed = true;
+					send({ type: 'output', chunk });
+				},
+			});
+
+			// Only for a provider that could not stream. Without this the command
+			// would appear to have produced no output at all.
+			if (!streamed) {
+				if (result.stdout) send({ type: 'output', chunk: result.stdout });
+				if (result.stderr) send({ type: 'output', chunk: result.stderr });
+			}
+
+			const authored = result.changedFiles.filter((file) => isAgentAuthored(file.path));
+			if (authored.length > 0) {
+				await this.workspaceStub().writeMany(
+					authored.map((file) => ({ path: file.path, content: file.content })),
+					`written by \`${command.slice(0, 40)}\``,
+				);
+				const changed = new Set(await this.changedPaths());
+				for (const file of authored) {
+					changed.add(file.path.startsWith('/') ? file.path : `/${file.path}`);
+				}
+				this.setMeta('changedPaths', JSON.stringify([...changed]));
+			}
+
+			send({
+				type: 'exit',
+				exitCode: result.exitCode,
+				durationMs: result.durationMs,
+				changedFiles: authored.map((file) => file.path),
+			});
+		} catch (error) {
+			send({ type: 'error', message: describeAgentError(error) });
+		} finally {
+			await flushing;
+			await writer.close().catch(() => {});
+		}
 	}
 
 	/**
@@ -465,6 +1017,8 @@ export class AgentSessionDO extends DurableObject<Env> {
 		}
 
 		this.running = true;
+		this.stopRequested = false;
+		this.turnEvents = [];
 		try {
 			const result = await this.executeTurn(prompt, trigger, () => {});
 			return { text: result.text, ok: true };
@@ -512,6 +1066,24 @@ export class AgentSessionDO extends DurableObject<Env> {
 		const sessionId = this.getMeta('sessionId') ?? 'default';
 		const model = this.model();
 
+		// Wrapped so the object can keep the last preview link. Without this it
+		// would only exist in the stream, and reopening the session would lose the
+		// running app the user was looking at.
+		const observe = (event: AgentEvent) => {
+			this.record(event);
+			if (event.type === 'preview_ready') {
+				this.setMeta(
+					'preview',
+					JSON.stringify({
+						port: event.port,
+						url: event.url,
+						expiresAt: Date.now() + PREVIEW_TTL_MS,
+					}),
+				);
+			}
+			emit(event);
+		};
+
 		this.appendMessage('user', userMessage);
 		this.appendTranscript('user', userMessage, undefined, trigger);
 		if (this.getMeta('title') === 'Untitled session') {
@@ -530,24 +1102,50 @@ export class AgentSessionDO extends DurableObject<Env> {
 			repoBrain ? repoBrain.recall(REPO_RECALL_LIMIT) : Promise.resolve([]),
 		]);
 
+		// One provider instance per turn, shared by the tools and — on the sandbox
+		// runtime — by the workspace. Two instances would mean two containers.
+		const sandbox = createSandbox(this.env, {
+			sessionId,
+			sandboxId: this.getMeta('sandboxId') ?? undefined,
+			keepWarm: keepsSandboxWarm(this.runtime()),
+			onSandboxCreated: (id) => {
+				this.setMeta('sandboxId', id);
+				this.setMeta('sandboxStartedAt', String(Date.now()));
+			},
+		});
+
+		// On the sandbox runtime the container holds the files and the object keeps
+		// their history. Chosen here rather than inside the tools, which is the
+		// whole point of the workspace interface.
+		const durableWorkspace = this.workspaceStub();
+		const filesLiveInSandbox = keepsSandboxWarm(this.runtime()) && sandbox !== null;
+		const workspace =
+			filesLiveInSandbox && sandbox
+				? new SandboxWorkspace(sandbox, durableWorkspace, repo?.checkout ?? null)
+				: durableWorkspace;
+
+		// A container this session has not used before starts empty, but the
+		// object may hold a workspace built up on the other runtime. Copy it
+		// across before the agent looks, or it concludes the files are gone.
+		if (workspace instanceof SandboxWorkspace) {
+			await workspace.hydrateFrom().catch(() => 0);
+		}
+
 		const context: ToolContext = {
 			sessionId,
 			userId: this.userId(),
 			// Seeded from storage so a follow-up turn can carry on from the plan
 			// the previous turn left behind rather than starting blank.
 			plan: this.getPlan(),
-			emit,
-			workspace: this.workspaceStub(),
+			emit: observe,
+			workspace,
+			filesLiveInSandbox,
 			brain,
 			repoBrain,
 			scheduler: this.schedulerStub(),
 			// Reuse this session's sandbox if one was already booted, so only the
 			// first command in a session pays for startup.
-			sandbox: createSandbox(this.env, {
-				sessionId,
-				sandboxId: this.getMeta('sandboxId') ?? undefined,
-				onSandboxCreated: (id) => this.setMeta('sandboxId', id),
-			}),
+			sandbox,
 			proposals: [],
 			// Reset per turn: a fresh turn may reuse a warm sandbox, but the safe
 			// assumption after a restart is that nothing is mirrored yet.
@@ -568,7 +1166,8 @@ export class AgentSessionDO extends DurableObject<Env> {
 			repoMemories,
 			skills,
 			messages: this.loadContext(),
-			emit,
+			emit: observe,
+			shouldStop: () => this.stopRequested,
 		});
 
 		for (const message of result.newMessages) {
@@ -578,10 +1177,14 @@ export class AgentSessionDO extends DurableObject<Env> {
 			this.appendTranscript('assistant', result.text, result.tools, trigger, result.segments);
 		}
 
-		// Stop the container as soon as the turn ends. Booting costs ~2s; leaving
-		// one idling costs money for as long as it lives, and a chat session can
-		// sit open for hours between messages.
-		if (context.sandbox && result.tools.some((tool) => tool.name === 'run_command')) {
+		// On the durable runtime the container goes as soon as the turn ends.
+		// Booting costs ~2s; leaving one idling costs money for as long as it
+		// lives, and a chat session can sit open for hours between messages.
+		//
+		// On the sandbox runtime it is kept deliberately — a dev server that dies
+		// between turns is not a dev server. The provider's idle timeout is the
+		// backstop for a session nobody comes back to.
+		if (context.sandbox && !keepsSandboxWarm(this.runtime())) {
 			await context.sandbox.dispose().catch(() => {});
 			this.ctx.storage.sql.exec("DELETE FROM meta WHERE key = 'sandboxId'");
 		}

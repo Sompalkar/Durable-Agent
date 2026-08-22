@@ -9,8 +9,11 @@ interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 const VARIANTS: Record<Variant, string> = {
+  // Maximum contrast rather than the accent, matching the landing page. Colour
+  // is spent on the agent's own marks and on live state; the primary action
+  // earns its weight from contrast, which reads as more certain than a hue.
   primary:
-    "bg-accent text-accent-ink hover:bg-accent/90 disabled:bg-accent/40 disabled:text-accent-ink/60",
+    "bg-ink text-canvas hover:opacity-90 disabled:bg-raised disabled:text-ink-faint disabled:opacity-100",
   secondary:
     "bg-raised text-ink border border-line hover:bg-hover hover:border-line-strong",
   ghost: "text-ink-soft hover:text-ink hover:bg-hover",

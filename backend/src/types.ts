@@ -85,9 +85,32 @@ export interface SessionSummary {
 	/** Turns used, against the demo cap when one is configured. */
 	turnsUsed: number;
 	turnLimit: number | null;
+	/**
+	 * Where this session's work happens: "durable" rents a container per command,
+	 * "sandbox" keeps one alive between turns. Changeable per session.
+	 */
+	runtime: string;
+	/**
+	 * The last port exposed from the sandbox, so reopening the session still
+	 * shows the running app instead of a link the user has to ask for again.
+	 */
+	preview: SessionPreview | null;
 	/** Model and effort this session runs on. Changeable per session. */
 	model: string;
 	effort: string;
+	/**
+	 * Whether a turn is in flight right now. A browser that reopens the session
+	 * uses this to reattach to it rather than showing an idle conversation with
+	 * work quietly happening behind it.
+	 */
+	running: boolean;
+}
+
+export interface SessionPreview {
+	port: number;
+	url: string;
+	/** Links are signed and time-limited, so a stale one has to be refreshed. */
+	expiresAt: number;
 }
 
 export interface SessionUsage {
@@ -111,6 +134,13 @@ export interface ToolOutcome {
 	 * so it is capped where the streamed copy is not.
 	 */
 	output?: string;
+	/**
+	 * An image to hand back to the model, not just describe to it.
+	 *
+	 * Sent as an image block in the tool result, which is the difference between
+	 * the agent being told a page looks wrong and being able to see that it does.
+	 */
+	image?: { mediaType: string; base64: string };
 }
 
 /**
@@ -221,6 +251,8 @@ export type AgentEvent =
 	| { type: 'plan'; plan: PlanStep[] }
 	/** Output from a shell command, while it is still running. */
 	| { type: 'command_output'; id: string; chunk: string }
+	/** Something in the sandbox is serving, and can be opened from the browser. */
+	| { type: 'preview_ready'; port: number; url: string }
 	| { type: 'turn_end'; stopReason: string | null; usage: TurnUsage }
 	| { type: 'error'; message: string };
 
@@ -229,3 +261,51 @@ export interface TurnUsage {
 	outputTokens: number;
 	cacheReadTokens: number;
 }
+
+/** A long-running process inside the container, as the UI sees it. */
+export interface SandboxProcess {
+	name: string;
+	command: string;
+	pid: number;
+	running: boolean;
+	/** The port it appears to be listening on, when one could be determined. */
+	port: number | null;
+}
+
+/** What the session's container is doing right now. */
+export interface SandboxStatus {
+	running: boolean;
+	/** Whether the runtime keeps it alive between turns. */
+	persistent: boolean;
+	startedAt: number | null;
+	processes: SandboxProcess[];
+	/** Every port in LISTEN, including servers the user started by hand. */
+	ports: ListeningPortInfo[];
+}
+
+/** A port the container is serving, and what is behind it. */
+export interface ListeningPortInfo {
+	port: number;
+	pid: number;
+	command: string;
+	/** True when the agent started it, so it can also be stopped by name. */
+	name: string | null;
+}
+
+/**
+ * One frame from the interactive shell.
+ *
+ * Kept separate from `AgentEvent` rather than folded into it: these come from a
+ * command the *user* typed, not from a turn, and nothing in the transcript
+ * should react to them.
+ */
+export type ShellEvent =
+	| { type: 'output'; chunk: string }
+	| {
+			type: 'exit';
+			exitCode: number;
+			durationMs: number;
+			/** Paths written back into the workspace, so the file tree can refresh. */
+			changedFiles: string[];
+	  }
+	| { type: 'error'; message: string };

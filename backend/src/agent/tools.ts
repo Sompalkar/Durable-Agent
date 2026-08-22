@@ -403,6 +403,172 @@ const SANDBOX_TOOLS: Anthropic.Tool[] = [
 ];
 
 /** Offered only when a repository is attached — otherwise there is no repo to file against. */
+/**
+ * Read-only git against the checkout in the sandbox, so `git diff` is literally
+ * what the pull request will contain rather than inferred from rows.
+ *
+ * Nothing writes: committing inside a container thrown away each turn would put
+ * the two sources of truth into disagreement, and the object has to win.
+ */
+/**
+ * Processes that keep running after the tool call returns. Separate from
+ * run_command, which waits for an end a dev server is never going to reach.
+ */
+const PROCESS_TOOLS: Anthropic.Tool[] = [
+	{
+		name: 'start_process',
+		description:
+			'Start a long-running process in the sandbox and return immediately, leaving it running. ' +
+			'Use this for anything that does not exit on its own — a dev server, a watcher, a queue worker. ' +
+			'Use run_command instead for anything that finishes, like a build or a test run. ' +
+			'Give it a short name so you can read its output or stop it later. ' +
+			'The process keeps running between turns only on the always-on runtime; on the on-demand ' +
+			'runtime the container is destroyed at the end of the turn and takes the process with it, ' +
+			'so start it and use it in the same turn. ' +
+			'Early output is returned so you can see straight away if it failed to bind a port.',
+		input_schema: {
+			type: 'object',
+			properties: {
+				name: {
+					type: 'string',
+					description: 'Short label, e.g. "dev" or "api". Used to read or stop it later.',
+				},
+				command: {
+					type: 'string',
+					description: 'The command to run, e.g. "npm run dev". Runs in the repository root.',
+				},
+				wait_ms: {
+					type: 'number',
+					description:
+						'How long to wait before reporting back, so a fast failure is caught. Defaults to 3000.',
+				},
+			},
+			required: ['name', 'command'],
+		},
+	},
+	{
+		name: 'preview_url',
+		description:
+			'Get a public URL for something listening on a port inside the sandbox, so the user can ' +
+			'open the running app in their own browser. Use this after starting a dev server, and ' +
+			'give the link to the user — they cannot reach the sandbox any other way. ' +
+			'The link expires, so fetch a fresh one rather than reusing an old one from earlier in ' +
+			'the conversation.',
+		input_schema: {
+			type: 'object',
+			properties: {
+				port: {
+					type: 'number',
+					description: 'The port the server is listening on, e.g. 3000.',
+				},
+			},
+			required: ['port'],
+		},
+	},
+	{
+		name: 'list_processes',
+		description:
+			'List processes started in this sandbox, whether each is still alive, and the port it ' +
+			'appears to be listening on. Check here before starting something that may already be running.',
+		input_schema: { type: 'object', properties: {} },
+	},
+	{
+		name: 'read_process_output',
+		description:
+			'Read recent output from a running process. This is where a dev server reports the port it ' +
+			'bound, the compile errors it hit, and the requests it served — check it before assuming ' +
+			'a server is healthy.',
+		input_schema: {
+			type: 'object',
+			properties: {
+				name: { type: 'string', description: 'The name given to start_process.' },
+				lines: { type: 'number', description: 'How many trailing lines to return. Defaults to 40.' },
+			},
+			required: ['name'],
+		},
+	},
+	{
+		name: 'stop_process',
+		description:
+			'Stop a process started with start_process. Stop a dev server when you are done with it ' +
+			'rather than leaving it holding a port.',
+		input_schema: {
+			type: 'object',
+			properties: { name: { type: 'string', description: 'The name given to start_process.' } },
+			required: ['name'],
+		},
+	},
+];
+
+const BROWSER_TOOLS: Anthropic.Tool[] = [
+	{
+		name: 'screenshot',
+		description:
+			'Open a URL in a real browser inside the sandbox and look at it. Returns the image ' +
+			'plus any errors the page logged to its console. ' +
+			'Use this after changing anything visual — you cannot tell whether a layout is right ' +
+			'by reading the code, and a passing test does not mean the page renders. ' +
+			'The URL must be served from inside the sandbox, so start the dev server with ' +
+			'run_command first and point at localhost. The container cannot reach the outside ' +
+			'internet or the user\'s machine. ' +
+			'The first call downloads a browser and takes a minute; later calls are quick.',
+		input_schema: {
+			type: 'object',
+			properties: {
+				url: {
+					type: 'string',
+					description: 'Page to open, e.g. "http://localhost:3000/login".',
+				},
+				full_page: {
+					type: 'boolean',
+					description:
+						'Capture the whole scrollable page rather than just the viewport. Off by default.',
+				},
+				wait_ms: {
+					type: 'number',
+					description:
+						'Milliseconds to wait after load, for a page that animates in or fetches on mount. Defaults to 1000.',
+				},
+			},
+			required: ['url'],
+		},
+	},
+];
+
+const GIT_TOOLS: Anthropic.Tool[] = [
+	{
+		name: 'git',
+		description:
+			'Run a read-only git command against the repository checkout in the sandbox. ' +
+			'Use "status" to see which files you have changed, "diff" for the exact lines, ' +
+			'and "diff_stat" for a per-file summary before opening a pull request. ' +
+			'"show" prints a file as it exists in the base commit, which is how you check what ' +
+			'you started from without undoing your own work, and "base" reports the commit you ' +
+			'are working from. ' +
+			'This reflects the real repository, so it is the most reliable answer to ' +
+			'"what have I actually changed". It cannot commit, push, or check out — ' +
+			'the workspace is the source of truth and the container is discarded each turn. ' +
+			'Note the clone is shallow, so history is one commit deep.',
+		input_schema: {
+			type: 'object',
+			properties: {
+				command: {
+					type: 'string',
+					enum: ['status', 'diff', 'diff_stat', 'show', 'base'],
+					description: 'Which read-only git command to run.',
+				},
+				path: {
+					type: 'string',
+					description:
+						'Optional file to scope to, e.g. "frontend/src/app.tsx". Required for "show". ' +
+						'Relative to the repository root, with no leading slash.',
+				},
+			},
+			required: ['command'],
+		},
+	},
+];
+
 const GITHUB_TOOLS: Anthropic.Tool[] = [
 	{
 		name: 'github_create_issue',
@@ -448,6 +614,11 @@ export function buildToolDefinitions(options: {
 		...SCHEDULE_TOOLS,
 		...PROPOSAL_TOOLS,
 		...(options.sandbox ? SANDBOX_TOOLS : []),
+		// Both need a container: nothing to keep running, and nothing to render on.
+		...(options.sandbox ? PROCESS_TOOLS : []),
+		...(options.sandbox ? BROWSER_TOOLS : []),
+		// Needs both: a checkout to inspect, and a container to inspect it in.
+		...(options.sandbox && options.repo ? GIT_TOOLS : []),
 		...(options.repo ? GITHUB_TOOLS : []),
 	];
 }

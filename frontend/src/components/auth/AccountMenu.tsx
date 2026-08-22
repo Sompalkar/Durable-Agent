@@ -1,10 +1,13 @@
 "use client";
 
 /**
- * The account row at the foot of the sidebar.
+ * The account switcher at the head of the sidebar.
  *
  * Collapsed it is one line — avatar, name, chevron. Expanded it shows the email
  * and the two things people actually come here for: settings, and signing out.
+ *
+ * The menu drops downward: this sits at the head of the rail, so there is no
+ * room above it and plenty below.
  */
 
 import Link from "next/link";
@@ -31,7 +34,7 @@ export function AccountMenu() {
       ) : null}
 
       {open ? (
-        <div className="absolute bottom-full left-0 z-20 mb-1.5 w-full overflow-hidden rounded-lg border border-line bg-raised shadow-lg">
+        <div className="absolute left-0 top-full z-20 mt-1.5 w-full min-w-[13rem] overflow-hidden rounded-xl border border-line bg-panel shadow-pop">
           <div className="border-b border-line px-3 py-2.5">
             <p className="truncate text-[13px] font-medium text-ink">
               {user.name}
@@ -61,10 +64,10 @@ export function AccountMenu() {
           open ? "bg-hover" : "hover:bg-hover",
         )}
       >
-        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-accent/15 text-[12px] font-semibold uppercase text-accent">
+        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-ink text-[11px] font-semibold uppercase text-canvas">
           {user.name.slice(0, 1) || user.email.slice(0, 1)}
         </span>
-        <span className="min-w-0 flex-1 truncate text-[13px] text-ink-soft">
+        <span className="min-w-0 flex-1 truncate text-[13.5px] font-medium text-ink">
           {user.name}
         </span>
         <svg

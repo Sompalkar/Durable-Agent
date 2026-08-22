@@ -5,21 +5,31 @@
  *
  * Auto-growing textarea; Enter sends, Shift+Enter inserts a newline. While a
  * turn is running the send button becomes a stop button.
+ *
+ * The box is a single card floating over the conversation rather than a bar
+ * welded to the bottom edge, and the session's controls sit inside it on their
+ * own row. Putting the model and effort here rather than in the page header is
+ * the point: they describe the message you are about to send, so they belong
+ * next to the send button, where you look anyway.
  */
 
 import { useEffect, useRef, useState } from "react";
-import { SendIcon, StopIcon } from "@/components/ui/icons";
+import { ArrowUpIcon, StopIcon } from "@/components/ui/icons";
 
-const MAX_HEIGHT = 160;
+const MAX_HEIGHT = 200;
 
 export function Composer({
   streaming,
+  stopping,
   onSend,
   onStop,
   disabled,
   initialValue = "",
+  controls,
 }: {
   streaming: boolean;
+  /** A stop was asked for and the turn is winding up. */
+  stopping?: boolean;
   onSend: (message: string) => void;
   onStop: () => void;
   disabled?: boolean;
@@ -32,6 +42,8 @@ export function Composer({
    * syncing in an effect, which React 19 rejects outright.
    */
   initialValue?: string;
+  /** Per-message settings, rendered on the toolbar row beside Send. */
+  controls?: React.ReactNode;
 }) {
   const [value, setValue] = useState(initialValue);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -66,11 +78,15 @@ export function Composer({
   };
 
   return (
-    <div className="border-t border-line bg-panel px-4 py-3">
-      {/* No focus ring on the wrapper. The composer is where the cursor lives
-          almost all the time, so highlighting it draws the eye away from the
-          conversation for no information. The border lifts slightly instead. */}
-      <div className="mx-auto flex max-w-3xl items-end gap-2 rounded-xl border border-line bg-raised px-3 py-2 shadow-sm transition-colors focus-within:border-line-strong">
+    <div className="shrink-0 bg-canvas px-3 pb-3 pt-1 sm:px-4 sm:pb-4">
+      {/* The focus indicator belongs on the card, not on the textarea: the
+          textarea opts out of the global outline (see globals.css) and this
+          border carries the state instead.
+
+          Deliberately not `overflow-hidden`. Clipping the card would look
+          tidier, but the model picker on the toolbar row opens upward out of
+          this box — hiding the overflow hides the entire menu. */}
+      <div className="mx-auto max-w-3xl rounded-2xl border border-line bg-panel shadow-soft transition-colors focus-within:border-accent/60">
         <textarea
           ref={textareaRef}
           rows={1}
@@ -84,32 +100,40 @@ export function Composer({
             }
           }}
           placeholder="Ask the agent to build, search, or edit something…"
-          className="block max-h-[160px] flex-1 resize-none bg-transparent text-[15px] leading-6 text-ink outline-none placeholder:text-ink-faint disabled:cursor-not-allowed"
+          className="block max-h-[200px] w-full resize-none bg-transparent px-4 pb-1 pt-3.5 text-[15px] leading-6 text-ink outline-none placeholder:text-ink-faint focus-visible:outline-none disabled:cursor-not-allowed"
         />
 
-        {streaming ? (
-          <button
-            onClick={onStop}
-            className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-line bg-panel px-3.5 text-[13px] font-medium text-ink transition-colors hover:border-line-strong hover:bg-hover"
-          >
-            <StopIcon className="h-3.5 w-3.5" />
-            Stop
-          </button>
-        ) : (
-          <button
-            onClick={submit}
-            disabled={!value.trim() || disabled}
-            aria-label="Send message"
-            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-accent text-accent-ink shadow-sm shadow-accent/20 transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:bg-accent/30 disabled:text-accent-ink/50 disabled:shadow-none"
-          >
-            <SendIcon className="h-[18px] w-[18px]" />
-          </button>
-        )}
-      </div>
+        <div className="flex items-center gap-2 px-2.5 pb-2.5 pt-1">
+          <p className="hidden min-w-0 flex-1 truncate pl-1.5 text-[11px] text-ink-faint sm:block">
+            Enter to send · Shift+Enter for a new line
+          </p>
+          <span className="flex-1 sm:hidden" />
 
-      <p className="mx-auto mt-2 max-w-3xl px-1 text-center text-[11px] text-ink-faint">
-        Enter to send · Shift+Enter for a new line
-      </p>
+          {controls ? <div className="shrink-0">{controls}</div> : null}
+
+          {streaming ? (
+            <button
+              onClick={onStop}
+              disabled={stopping}
+              className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-line bg-raised px-3.5 text-[13px] font-medium text-ink transition-colors hover:border-line-strong hover:bg-hover disabled:cursor-default disabled:text-ink-faint disabled:hover:border-line disabled:hover:bg-raised"
+            >
+              <StopIcon className="h-3.5 w-3.5" />
+              {/* The turn is allowed to finish the step it is on, so this can sit
+                  here for a few seconds. Saying so beats looking wedged. */}
+              {stopping ? "Stopping…" : "Stop"}
+            </button>
+          ) : (
+            <button
+              onClick={submit}
+              disabled={!value.trim() || disabled}
+              aria-label="Send message"
+              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-ink text-canvas transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:bg-raised disabled:text-ink-faint disabled:opacity-100"
+            >
+              <ArrowUpIcon className="h-[18px] w-[18px]" />
+            </button>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

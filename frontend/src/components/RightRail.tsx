@@ -3,10 +3,14 @@
 /**
  * The right rail: everything the agent has that is not the conversation.
  *
- * Five tabs, one per store. Four read Durable Objects — files and revisions for
- * this session, memory and skills shared across all of them, and the alarms
- * that run the agent when nobody is watching. The fifth reads MongoDB, and is
- * the only one whose contents outlive the session.
+ * Eight tabs, in the order work moves through them: what the agent has (Files),
+ * what it changed (Review), the machine it changed it on (Shell, Browser), what
+ * it remembers (Memory, Skills), what runs unattended (Agents), and what
+ * outlives the session (Archive).
+ *
+ * Most read Durable Objects. Archive reads MongoDB. Shell and Browser are the
+ * exceptions: both address the container itself, and both are empty without
+ * one — which is a property of the session's runtime, not a failure.
  */
 
 import { classNames } from "@/lib/format";
@@ -15,21 +19,46 @@ import type { BrainState } from "@/lib/useBrain";
 import type { RepoState } from "@/lib/useRepo";
 import type { ScheduleState } from "@/lib/useSchedules";
 import type { WorkspaceState } from "@/lib/useWorkspace";
+import type { SessionPreview } from "@/lib/types";
+import type { ShellState } from "@/lib/useShell";
+import type { SandboxState } from "@/lib/useSandbox";
+import type { BrowserSession } from "@/lib/useBrowser";
+import type { DesktopState } from "@/lib/useDesktop";
 import { ArchivePanel } from "@/components/archive/ArchivePanel";
 import { MemoryPanel } from "@/components/brain/MemoryPanel";
 import { SkillsPanel } from "@/components/brain/SkillsPanel";
 import { SchedulePanel } from "@/components/schedule/SchedulePanel";
+import { PreviewPanel } from "@/components/workspace/PreviewPanel";
+import { ReviewPanel } from "@/components/workspace/ReviewPanel";
+import { AgentBrowserPanel } from "@/components/workspace/AgentBrowserPanel";
+import { DesktopPanel } from "@/components/workspace/DesktopPanel";
+import { ShellPanel } from "@/components/workspace/ShellPanel";
 import { WorkspacePanel } from "@/components/workspace/WorkspacePanel";
 import {
   BookmarkIcon,
   BrainIcon,
+  BrowserIcon,
   ClockIcon,
   CloseIcon,
   FolderIcon,
+  MonitorIcon,
+  DesktopIcon,
+  GitBranchIcon,
   HistoryIcon,
+  TerminalIcon,
 } from "@/components/ui/icons";
 
-export type RailTab = "files" | "memory" | "skills" | "schedule" | "archive";
+export type RailTab =
+  | "files"
+  | "review"
+  | "shell"
+  | "browser"
+  | "preview"
+  | "desktop"
+  | "memory"
+  | "skills"
+  | "schedule"
+  | "archive";
 
 const TABS: Array<{
   id: RailTab;
@@ -37,6 +66,11 @@ const TABS: Array<{
   icon: React.ComponentType<React.SVGProps<SVGSVGElement>>;
 }> = [
   { id: "files", label: "Files", icon: FolderIcon },
+  { id: "review", label: "Review", icon: GitBranchIcon },
+  { id: "shell", label: "Shell", icon: TerminalIcon },
+  { id: "browser", label: "Browser", icon: BrowserIcon },
+  { id: "preview", label: "Preview", icon: MonitorIcon },
+  { id: "desktop", label: "Desktop", icon: DesktopIcon },
   { id: "memory", label: "Memory", icon: BrainIcon },
   { id: "skills", label: "Skills", icon: BookmarkIcon },
   { id: "schedule", label: "Agents", icon: ClockIcon },
@@ -53,9 +87,25 @@ export function RightRail({
   schedules,
   archive,
   repo,
+  preview,
+  shell,
+  sandbox,
+  browser,
+  desktop,
+  persistent,
+  onEnablePersistent,
   onTaskReady,
 }: {
   sessionId: string;
+  /** The port the sandbox is currently serving, if any. */
+  preview: SessionPreview | null;
+  shell: ShellState;
+  sandbox: SandboxState;
+  browser: BrowserSession;
+  desktop: DesktopState;
+  /** Whether the session keeps a container between turns. */
+  persistent: boolean;
+  onEnablePersistent: () => Promise<void>;
   tab: RailTab;
   onTabChange: (tab: RailTab) => void;
   onClose?: () => void;
@@ -68,6 +118,14 @@ export function RightRail({
 }) {
   const counts: Record<RailTab, number> = {
     files: workspace.tree?.stats.fileCount ?? 0,
+    // Files this session has changed — the size of the review waiting for you.
+    review: repo.changedPaths.length,
+    // Commands run this session. Zero reads as "nothing typed yet".
+    shell: shell.entries.length,
+    browser: 0,
+    // The port, so the tab reads "Preview 8020" while something is serving.
+    preview: preview?.port ?? 0,
+    desktop: 0,
     memory: brain.memories.length,
     skills: brain.skills.length,
     schedule: schedules.schedules.filter((s) => s.status === "active").length,
@@ -76,45 +134,64 @@ export function RightRail({
 
   return (
     <aside className="flex h-full min-h-0 w-full shrink-0 flex-col border-line bg-panel xl:border-l">
-      <nav
-        role="tablist"
-        aria-label="Agent state"
-        className="flex shrink-0 items-center gap-0.5 border-b border-line px-2 py-2"
-      >
-        {TABS.map(({ id, label, icon: Icon }) => (
-          <button
-            key={id}
-            role="tab"
-            aria-selected={tab === id}
-            onClick={() => onTabChange(id)}
-            className={classNames(
-              "flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2 py-2",
-              "text-[13px] font-medium transition-colors",
-              tab === id
-                ? "bg-raised text-ink"
-                : "text-ink-faint hover:bg-hover hover:text-ink-soft",
-            )}
-          >
-            <Icon className="h-4 w-4" />
-            <span className="hidden sm:inline">{label}</span>
-            {counts[id] > 0 ? (
-              <span className="font-mono text-[11px] text-ink-faint">
-                {counts[id]}
-              </span>
-            ) : null}
-          </button>
-        ))}
+      {/*
+        Eight labelled tabs need far more width than the rail has, so giving
+        each an equal share truncates every label and letting the row scroll
+        hides whichever tab is last. Only the selected tab is labelled instead:
+        the one you need named is the one you are looking at, and the rest stay
+        as icons with a tooltip and an accessible name.
+      */}
+      <div className="flex shrink-0 items-center gap-1 border-b border-line px-2 py-1.5">
+        <nav
+          role="tablist"
+          aria-label="Agent state"
+          className="no-scrollbar flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto"
+        >
+          {TABS.map(({ id, label, icon: Icon }) => {
+            const selected = tab === id;
+            return (
+              <button
+                key={id}
+                role="tab"
+                aria-selected={selected}
+                aria-label={label}
+                title={label}
+                onClick={() => onTabChange(id)}
+                className={classNames(
+                  "flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-2",
+                  "text-[12.5px] font-medium transition-colors",
+                  selected
+                    ? "bg-raised text-ink"
+                    : "text-ink-faint hover:bg-hover hover:text-ink-soft",
+                )}
+              >
+                <Icon className="h-4 w-4 shrink-0" />
+                {selected ? label : null}
+                {counts[id] > 0 ? (
+                  <span
+                    className={classNames(
+                      "font-mono text-[10.5px] leading-none",
+                      selected ? "text-ink-soft" : "text-ink-faint",
+                    )}
+                  >
+                    {counts[id]}
+                  </span>
+                ) : null}
+              </button>
+            );
+          })}
+        </nav>
         {onClose ? (
           <button
             onClick={onClose}
             aria-label="Close agent panel"
             title="Close panel"
-            className="ml-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-ink-faint transition-colors hover:bg-hover hover:text-ink"
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-ink-faint transition-colors hover:bg-hover hover:text-ink"
           >
             <CloseIcon className="h-4 w-4" />
           </button>
         ) : null}
-      </nav>
+      </div>
 
       <div className="min-h-0 flex-1">
         {tab === "files" ? (
@@ -123,6 +200,32 @@ export function RightRail({
             workspace={workspace}
             repo={repo}
             onTaskReady={onTaskReady}
+          />
+        ) : null}
+        {tab === "review" ? <ReviewPanel sessionId={sessionId} repo={repo} /> : null}
+        {tab === "shell" ? (
+          <ShellPanel shell={shell} onEnablePersistent={onEnablePersistent} />
+        ) : null}
+        {tab === "browser" ? (
+          <AgentBrowserPanel
+            browser={browser}
+            persistent={persistent}
+            onEnablePersistent={onEnablePersistent}
+          />
+        ) : null}
+        {tab === "preview" ? (
+          <PreviewPanel
+            preview={preview}
+            persistent={persistent}
+            sandbox={sandbox}
+            onEnablePersistent={onEnablePersistent}
+          />
+        ) : null}
+        {tab === "desktop" ? (
+          <DesktopPanel
+            desktop={desktop}
+            persistent={persistent}
+            onEnablePersistent={onEnablePersistent}
           />
         ) : null}
         {tab === "memory" ? <MemoryPanel brain={brain} /> : null}

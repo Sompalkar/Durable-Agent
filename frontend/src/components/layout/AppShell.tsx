@@ -16,19 +16,14 @@
  */
 
 import { usePathname } from "next/navigation";
-import { createContext, useContext, useState } from "react";
+import { useState } from "react";
 import { classNames } from "@/lib/format";
 import { SessionSidebar } from "@/components/sessions/SessionSidebar";
+import { LeftPanelContext } from "./left-panel";
 
 const LG = 1024;
 
-type LeftPanel = { toggle: () => void };
-const LeftPanelContext = createContext<LeftPanel>({ toggle: () => {} });
-
-/** Lets any header render the sessions toggle without prop-drilling. */
-export function useLeftPanel(): LeftPanel {
-  return useContext(LeftPanelContext);
-}
+export { useLeftPanel } from "./left-panel";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const [left, setLeft] = useState<boolean | null>(null);
@@ -51,18 +46,19 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <LeftPanelContext.Provider value={{ toggle }}>
-      <div className="relative flex h-full overflow-hidden">
+      <div className="relative flex h-full overflow-hidden bg-canvas">
         {overlayOpen ? (
           <div
             role="presentation"
             onClick={() => setLeft(false)}
-            className="absolute inset-0 z-30 bg-black/50 lg:hidden"
+            className="animate-in absolute inset-0 z-30 bg-black/40 backdrop-blur-[2px] lg:hidden"
           />
         ) : null}
 
         <div
           className={classNames(
-            "absolute inset-y-0 left-0 z-40 transition-transform duration-200 lg:static lg:z-auto",
+            "absolute inset-y-0 left-0 z-40 shadow-pop transition-transform duration-200",
+            "lg:static lg:z-auto lg:shadow-none",
             left === true
               ? "translate-x-0"
               : left === false

@@ -75,16 +75,27 @@ sessionRoutes.get('/:id', async (c) => {
 sessionRoutes.patch('/:id', async (c) => {
 	const user = c.get('user');
 	const id = c.req.param('id');
-	const body = await readJson<{ title?: string; model?: string; effort?: string }>(c.req.raw);
+	const body = await readJson<{
+		title?: string;
+		model?: string;
+		effort?: string;
+		runtime?: string;
+	}>(c.req.raw);
 	const stub = sessionStub(c.env, user.id, id);
 
-	if (body.model !== undefined || body.effort !== undefined) {
-		const summary = await stub.configure({ model: body.model, effort: body.effort });
+	if (body.model !== undefined || body.effort !== undefined || body.runtime !== undefined) {
+		const summary = await stub.configure({
+			model: body.model,
+			effort: body.effort,
+			runtime: body.runtime,
+		});
 		return c.json({ session: summary });
 	}
 
 	if (typeof body.title !== 'string' || !body.title.trim()) {
-		throw ApiError.badRequest('"title" must be a non-empty string, or send "model"/"effort".');
+		throw ApiError.badRequest(
+			'"title" must be a non-empty string, or send "model", "effort" or "runtime".',
+		);
 	}
 
 	const summary = await stub.rename(body.title.trim());
@@ -157,6 +168,162 @@ sessionRoutes.post('/:id/messages', async (c) => {
 	if (!response.ok || !response.body) {
 		const error = await response.text();
 		throw new ApiError(response.status === 409 ? 409 : 500, error || 'Failed to start the turn.');
+	}
+
+	return new Response(response.body, {
+		headers: {
+			'Content-Type': 'text/event-stream; charset=utf-8',
+			'Cache-Control': 'no-cache, no-transform',
+			Connection: 'keep-alive',
+			'X-Accel-Buffering': 'no',
+		},
+	});
+});
+
+/**
+ * GET /api/sessions/:id/stream — follow a turn that is already running.
+ *
+ * The turn belongs to the session object, not to the request that started it,
+ * so a browser that reloaded (or a second tab) can pick it back up. Replays
+ * what has happened so far, then streams the rest. Closes immediately when
+ * nothing is running.
+ */
+sessionRoutes.get('/:id/stream', async (c) => {
+	const stub = sessionStub(c.env, c.get('user').id, c.req.param('id'));
+	const response = await stub.fetch('http://session/attach');
+
+	if (!response.body) throw new ApiError(500, 'Failed to attach to the turn.');
+
+	return new Response(response.body, {
+		headers: {
+			'Content-Type': 'text/event-stream; charset=utf-8',
+			'Cache-Control': 'no-cache, no-transform',
+			Connection: 'keep-alive',
+			'X-Accel-Buffering': 'no',
+		},
+	});
+});
+
+/**
+ * POST /api/sessions/:id/stop — ask the running turn to wind up.
+ *
+ * Separate from the streaming request on purpose. That one is parked inside the
+ * session object for the length of the turn, so the only way to reach the turn
+ * is a second request into the same object.
+ */
+sessionRoutes.post('/:id/stop', async (c) => {
+	const stub = sessionStub(c.env, c.get('user').id, c.req.param('id'));
+	return c.json(await stub.requestStop());
+});
+
+/** POST /api/sessions/:id/browser — drive the container's browser. */
+sessionRoutes.post('/:id/browser', async (c) => {
+	const action = await readJson<{ type?: string }>(c.req.raw);
+	if (typeof action.type !== 'string') {
+		throw ApiError.badRequest('"type" is required.');
+	}
+
+	const stub = sessionStub(c.env, c.get('user').id, c.req.param('id'));
+	try {
+		return c.json(await stub.browser(action as never));
+	} catch (cause) {
+		throw new ApiError(409, cause instanceof Error ? cause.message : 'The browser failed.');
+	}
+});
+
+/** GET /api/sessions/:id/desktop — is the desktop serving, and where? */
+sessionRoutes.get('/:id/desktop', async (c) => {
+	const stub = sessionStub(c.env, c.get('user').id, c.req.param('id'));
+	return c.json(await stub.desktop());
+});
+
+/** POST /api/sessions/:id/desktop — start it, or open a URL on it. */
+sessionRoutes.post('/:id/desktop', async (c) => {
+	const body = await readJson<{ url?: string }>(c.req.raw);
+	const stub = sessionStub(c.env, c.get('user').id, c.req.param('id'));
+
+	try {
+		if (typeof body.url === 'string' && body.url.trim()) {
+			await stub.openOnDesktop(body.url.trim());
+		}
+		return c.json(await stub.startDesktop());
+	} catch (cause) {
+		throw new ApiError(409, cause instanceof Error ? cause.message : 'The desktop failed.');
+	}
+});
+
+/** DELETE /api/sessions/:id/desktop — stop it, leave the container up. */
+sessionRoutes.delete('/:id/desktop', async (c) => {
+	const stub = sessionStub(c.env, c.get('user').id, c.req.param('id'));
+	return c.json(await stub.stopDesktop());
+});
+
+/** GET /api/sessions/:id/sandbox — is a container up, and what is it running? */
+sessionRoutes.get('/:id/sandbox', async (c) => {
+	const stub = sessionStub(c.env, c.get('user').id, c.req.param('id'));
+	return c.json(await stub.sandboxStatus());
+});
+
+/** DELETE /api/sessions/:id/sandbox — destroy the container, keep the session. */
+sessionRoutes.delete('/:id/sandbox', async (c) => {
+	const stub = sessionStub(c.env, c.get('user').id, c.req.param('id'));
+	return c.json(await stub.stopSandbox());
+});
+
+/** DELETE /api/sessions/:id/sandbox/processes/:name — stop one dev server. */
+sessionRoutes.delete('/:id/sandbox/processes/:name', async (c) => {
+	const stub = sessionStub(c.env, c.get('user').id, c.req.param('id'));
+	return c.json(await stub.stopSandboxProcess(c.req.param('name')));
+});
+
+/** POST /api/sessions/:id/sandbox/preview — a fresh link for one port. */
+sessionRoutes.post('/:id/sandbox/preview', async (c) => {
+	const body = await readJson<{ port?: number }>(c.req.raw);
+	const port = Number(body.port);
+	if (!Number.isInteger(port) || port < 1 || port > 65535) {
+		throw ApiError.badRequest('"port" must be a valid port number.');
+	}
+
+	const stub = sessionStub(c.env, c.get('user').id, c.req.param('id'));
+	const preview = await stub.sandboxPreview(port);
+	if (!preview) {
+		throw new ApiError(409, 'No container is running, or it cannot expose a port.');
+	}
+	return c.json({ preview });
+});
+
+/**
+ * POST /api/sessions/:id/shell — run one command, stream its output back.
+ *
+ * The session object decides whether a shell is available at all (it depends on
+ * the runtime), so this route only checks the session exists and pipes the
+ * stream. Errors come back as JSON with a `code` the UI can act on rather than
+ * only a sentence it has to show verbatim.
+ */
+sessionRoutes.post('/:id/shell', async (c) => {
+	const user = c.get('user');
+	const id = c.req.param('id');
+	const body = await readJson<{ command?: string }>(c.req.raw);
+	if (typeof body.command !== 'string' || !body.command.trim()) {
+		throw ApiError.badRequest('"command" must be a non-empty string.');
+	}
+
+	const stub = sessionStub(c.env, user.id, id);
+	const summary = await stub.summary();
+	if (!summary.id) throw ApiError.notFound(`Session ${id} does not exist.`);
+
+	const response = await stub.fetch('http://session/shell', {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ command: body.command }),
+	});
+
+	// A refusal (wrong runtime, turn in flight) arrives as JSON, not a stream.
+	if (!response.ok || !response.body) {
+		return new Response(await response.text(), {
+			status: response.status,
+			headers: { 'Content-Type': 'application/json' },
+		});
 	}
 
 	return new Response(response.body, {

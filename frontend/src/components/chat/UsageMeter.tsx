@@ -17,14 +17,21 @@ export function UsageMeter({ session }: { session: SessionSummary }) {
   const nearLimit = turnLimit !== null && turnsUsed >= turnLimit * 0.8;
 
   return (
+    // The token counts are the first thing to go when the header is tight:
+    // with both rails open on a 1280px laptop the full meter left the session
+    // title truncated to a few characters. Cost and the turn cap stay at every
+    // width, because those are the two numbers that change a decision.
     <div className="flex shrink-0 items-center gap-3 font-mono text-[11px] text-ink-faint">
-      <span title="Input + output tokens across this session">
+      <span
+        className="hidden 2xl:inline"
+        title="Input + output tokens across this session"
+      >
         {formatCompact(totalTokens)} tok
       </span>
 
       {usage.cacheReadTokens > 0 ? (
         <span
-          className="text-positive"
+          className="hidden text-positive 2xl:inline"
           title="Tokens served from the prompt cache, billed at about a tenth of the input rate"
         >
           {formatCompact(usage.cacheReadTokens)} cached

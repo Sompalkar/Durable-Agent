@@ -8,13 +8,14 @@
  * component is presentational.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { classNames } from "@/lib/format";
 import type {
   ModelOption,
   PlanStep,
   Proposal,
+  SessionPreview,
   SessionSummary,
   ToolActivity,
   TranscriptMessage,
@@ -26,8 +27,14 @@ import { useRepo } from "@/lib/useRepo";
 import { useBrain } from "@/lib/useBrain";
 import { useSchedules } from "@/lib/useSchedules";
 import { useWorkspace } from "@/lib/useWorkspace";
+import { useResizable } from "@/lib/useResizable";
+import { useShell } from "@/lib/useShell";
+import { useSandbox } from "@/lib/useSandbox";
+import { useBrowser } from "@/lib/useBrowser";
+import { useDesktop } from "@/lib/useDesktop";
 import { ChatPanel } from "@/components/chat/ChatPanel";
 import { ModelPicker } from "@/components/chat/ModelPicker";
+import { RuntimeSwitch } from "@/components/chat/RuntimeSwitch";
 import { UsageMeter } from "@/components/chat/UsageMeter";
 import { BackgroundActivity } from "@/components/BackgroundActivity";
 import { RightRail, type RailTab } from "@/components/RightRail";
@@ -57,6 +64,25 @@ export function SessionView({ sessionId }: { sessionId: string }) {
   const [models, setModels] = useState<ModelOption[]>([]);
   const [efforts, setEfforts] = useState<string[]>([]);
 
+  // Width applies only from xl up, where the rail is a column rather than an
+  // overlay; below that it is full-width and the inline style would fight the
+  // drawer's own sizing.
+  const resize = useResizable({
+    storageKey: "rail-width",
+    initial: 432,
+    min: 320,
+    max: 880,
+  });
+  const [wide, setWide] = useState(false);
+  useEffect(() => {
+    const query = window.matchMedia(`(min-width: ${XL}px)`);
+    const sync = () => setWide(query.matches);
+    sync();
+    query.addEventListener("change", sync);
+    return () => query.removeEventListener("change", sync);
+  }, []);
+  const railStyle = wide ? { width: `${resize.width}px` } : undefined;
+
   const workspace = useWorkspace(sessionId);
   const brain = useBrain();
   const schedules = useSchedules(sessionId);
@@ -64,6 +90,27 @@ export function SessionView({ sessionId }: { sessionId: string }) {
   // and there is no reason to run it for a panel nobody is looking at.
   const archive = useArchive(sessionId, tab === "archive");
   const repo = useRepo(sessionId);
+  // The user's own commands can write files, so the tree refreshes on the same
+  // signal the agent's commands use.
+  // Polled only while a panel that shows it is open — a status read runs a
+  // command inside the container, and the container is billed while it lives.
+  const sandbox = useSandbox(
+    sessionId,
+    tab === "preview" || tab === "shell",
+    useCallback(
+      (preview: SessionPreview) =>
+        setSession((current) => (current ? { ...current, preview } : current)),
+      [],
+    ),
+  );
+
+  const browser = useBrowser(sessionId);
+  const desktop = useDesktop(sessionId, tab === "desktop");
+
+  const shell = useShell(sessionId, {
+    runtime: session?.runtime,
+    onWorkspaceChanged: workspace.refresh,
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -113,12 +160,22 @@ export function SessionView({ sessionId }: { sessionId: string }) {
 
   /** Switch model or effort. Takes effect on the next turn. */
   const configure = useCallback(
-    async (next: { model?: string; effort?: string }) => {
+    async (next: { model?: string; effort?: string; runtime?: string }) => {
       const { session: updated } = await api.configureSession(sessionId, next);
       setSession(updated);
     },
     [sessionId],
   );
+
+  /**
+   * Switch this session to the runtime that keeps a container alive.
+   *
+   * Offered from the shell and browser panels, which are the two places where
+   * the ephemeral runtime is what stopped you.
+   */
+  const enablePersistent = useCallback(async () => {
+    await configure({ runtime: "sandbox" });
+  }, [configure]);
 
   /** Refresh the header's usage counters once a turn settles. */
   const refreshSession = useCallback(async () => {
@@ -198,9 +255,36 @@ export function SessionView({ sessionId }: { sessionId: string }) {
     }, [refreshWorkspace, refreshRepo]),
     onBrainChanged: useCallback(() => refreshBrain(), [refreshBrain]),
     onScheduleChanged: useCallback(() => refreshSchedules(), [refreshSchedules]),
+    // Held here rather than refetched: the panel should show the running app
+    // the moment the port binds, not after the turn settles.
+    onPreviewReady: useCallback(
+      (next: { port: number; url: string }) =>
+        setSession((current) =>
+          current
+            ? { ...current, preview: { ...next, expiresAt: Date.now() + 3_600_000 } }
+            : current,
+        ),
+      [],
+    ),
     onProposals: useCallback((next: Proposal[]) => setProposals(next), []),
     onPlan: useCallback((next: PlanStep[]) => setPlan(next), []),
   });
+
+  /**
+   * Rejoin a turn that was already running when this session was opened.
+   *
+   * The turn belongs to the Durable Object, not to the tab that started it, so
+   * a reload never stopped it — it only stopped anyone watching. Tried once per
+   * session: `resume` changes identity as the stream starts and stops, and
+   * without the guard that alone would restart it forever.
+   */
+  const resume = stream.resume;
+  const resumedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!session?.running || resumedRef.current === sessionId) return;
+    resumedRef.current = sessionId;
+    void resume();
+  }, [session?.running, sessionId, resume]);
 
   // An issue becomes a draft, not a turn. It arrives with a counter so picking
   // the same issue twice still refills the box.
@@ -259,7 +343,7 @@ export function SessionView({ sessionId }: { sessionId: string }) {
   return (
     <div className="relative flex min-h-0 min-w-0 flex-1">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <header className="flex items-center gap-2 border-b border-line bg-panel px-3 py-2">
+        <header className="flex h-13 shrink-0 items-center gap-1.5 border-b border-line bg-canvas px-2 sm:px-3">
           <button
             onClick={leftPanel.toggle}
             aria-label="Toggle sessions"
@@ -267,42 +351,54 @@ export function SessionView({ sessionId }: { sessionId: string }) {
           >
             <PanelIcon className="h-[18px] w-[18px]" />
           </button>
-          <div className="min-w-0 flex-1">
-            <h2 className="truncate text-[15px] font-semibold leading-tight tracking-tight">
+
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <h2 className="truncate text-[14px] font-semibold leading-tight tracking-tight">
               {session.title}
             </h2>
-            <p className="truncate text-xs leading-tight text-ink-faint">
-              Durable Object <code className="font-mono">{session.id}</code>
-            </p>
+            {/* The Durable Object id, as a chip. It is the thing you quote when
+                something goes wrong, so it stays visible where there is room.
+
+                Only the leading segment: a full UUID is 36 characters, and at
+                `shrink-0` it collided with the usage meter and overprinted the
+                title. The prefix is enough to identify a session, and the whole
+                id is on the tooltip and one click away in the URL. */}
+            <code
+              title={`Durable Object ${session.id}`}
+              className="hidden min-w-0 shrink truncate rounded-md border border-line bg-raised px-1.5 py-0.5 font-mono text-[11px] leading-none text-ink-faint 2xl:inline-block"
+            >
+              {session.id.slice(0, 8)}
+            </code>
           </div>
-          <div className="flex shrink-0 items-center gap-2">
+
+          <div className="flex shrink-0 items-center gap-1.5">
             <div className="hidden xl:block">
               <UsageMeter session={session} />
             </div>
-            {models.length > 0 ? (
-              <ModelPicker
-                models={models}
-                efforts={efforts}
-                model={session.model}
-                effort={session.effort}
-                disabled={stream.streaming}
-                onChange={(next) => void configure(next)}
-              />
-            ) : null}
+            <RuntimeSwitch
+              runtime={session.runtime}
+              disabled={stream.streaming}
+              onChange={(runtime) => configure({ runtime })}
+            />
             <button
               onClick={toggleRail}
               aria-label="Toggle agent panel"
               title="Files, memory, skills, and agents"
               className={classNames(
-                "inline-flex h-9 w-9 items-center justify-center rounded-lg border transition-colors",
+                "inline-flex h-9 w-9 items-center justify-center rounded-lg transition-colors",
                 rail === true
-                  ? "border-accent/40 bg-accent-dim text-accent"
-                  : "border-line text-ink-soft hover:border-line-strong hover:text-ink",
+                  ? "bg-raised text-ink"
+                  : "text-ink-soft hover:bg-hover hover:text-ink",
               )}
             >
               <PanelRightIcon className="h-[18px] w-[18px]" />
             </button>
-            <ThemeToggle className="hidden sm:inline-flex" />
+            {/* Shown at every width: the header has room for it once the
+                Durable Object chip and usage meter drop away, and the previous
+                `hidden sm:inline-flex` never applied — `hidden` and the base
+                `inline-flex` are both display utilities, and Tailwind emits
+                `inline-flex` last, so it won at every breakpoint. */}
+            <ThemeToggle />
           </div>
         </header>
 
@@ -316,6 +412,18 @@ export function SessionView({ sessionId }: { sessionId: string }) {
           proposals={proposals}
           plan={plan}
           onSend={send}
+          composerControls={
+            models.length > 0 ? (
+              <ModelPicker
+                models={models}
+                efforts={efforts}
+                model={session.model}
+                effort={session.effort}
+                disabled={stream.streaming}
+                onChange={(next) => void configure(next)}
+              />
+            ) : null
+          }
         />
       </div>
 
@@ -324,14 +432,21 @@ export function SessionView({ sessionId }: { sessionId: string }) {
         <div
           role="presentation"
           onClick={() => setRail(false)}
-          className="absolute inset-0 z-30 bg-black/50 xl:hidden"
+          className="animate-in absolute inset-0 z-30 bg-black/40 backdrop-blur-[2px] xl:hidden"
         />
       ) : null}
 
       <div
+        style={railStyle}
         className={classNames(
-          "absolute bottom-0 right-0 top-0 z-40 w-full max-w-[27rem] transition-transform duration-200",
-          "xl:static xl:z-auto xl:w-[27rem] xl:max-w-none xl:shrink-0",
+          "absolute bottom-0 right-0 top-0 z-40 w-full max-w-[27rem] shadow-pop",
+          // `xl:w-[27rem]` is the pre-JS fallback: the dragged width is applied
+          // inline and only once the viewport is known to be wide, so without a
+          // class width the rail would briefly span the whole column.
+          "xl:static xl:z-auto xl:w-[27rem] xl:max-w-none xl:shrink-0 xl:shadow-none",
+          // Transitions are suppressed mid-drag: animating a width that is
+          // already being driven by the pointer makes it lag behind the cursor.
+          resize.dragging ? "" : "transition-transform duration-200",
           rail === true
             ? "translate-x-0"
             : rail === false
@@ -339,6 +454,24 @@ export function SessionView({ sessionId }: { sessionId: string }) {
               : "translate-x-full xl:translate-x-0",
         )}
       >
+        {/*
+          Drag handle. Only from xl up, where the rail is in flow — below that
+          it is an overlay pinned to the viewport, and there is no second column
+          for it to trade width with.
+        */}
+        <div
+          {...resize.handleProps}
+          onDoubleClick={resize.reset}
+          title="Drag to resize · double-click to reset"
+          aria-label="Resize agent panel"
+          className={classNames(
+            "absolute inset-y-0 left-0 z-10 hidden w-1 cursor-col-resize xl:block",
+            "after:absolute after:inset-y-0 after:-left-1 after:w-3 after:content-['']",
+            "transition-colors hover:bg-accent/40 focus-visible:bg-accent/60",
+            resize.dragging && "bg-accent/60",
+          )}
+        />
+
         <RightRail
           sessionId={sessionId}
           tab={tab}
@@ -349,6 +482,13 @@ export function SessionView({ sessionId }: { sessionId: string }) {
           schedules={schedules}
           archive={archive}
           repo={repo}
+          preview={session?.preview ?? null}
+          shell={shell}
+          sandbox={sandbox}
+          browser={browser}
+          desktop={desktop}
+          persistent={session?.runtime === "sandbox"}
+          onEnablePersistent={enablePersistent}
           onTaskReady={prefill}
         />
       </div>

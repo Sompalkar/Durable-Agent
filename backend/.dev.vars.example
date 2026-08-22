@@ -16,3 +16,6 @@ SERVICE_TOKEN=""
 # Optional — only needed if SANDBOX_PROVIDER is set to "daytona" in wrangler.jsonc.
 # Without it the agent simply has no shell; every other feature still works.
 DAYTONA_API_KEY=""
+
+# Local dev origin for the Next.js app.
+ALLOWED_ORIGIN=http://localhost:3000

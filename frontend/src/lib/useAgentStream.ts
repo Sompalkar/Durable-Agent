@@ -36,12 +36,16 @@ interface StreamCallbacks {
   onScheduleChanged: () => void;
   /** Follow-up actions the agent offered before finishing. */
   onProposals: (proposals: Proposal[]) => void;
+  /** A port in the sandbox started serving. */
+  onPreviewReady: (preview: { port: number; url: string }) => void;
   /** Fires mid-turn, each time the agent rewrites its checklist. */
   onPlan: (plan: PlanStep[]) => void;
 }
 
 export interface AgentStream {
   streaming: boolean;
+  /** A stop has been asked for and the turn has not wound up yet. */
+  stopping: boolean;
   assistantText: string;
   thinkingText: string;
   activities: ToolActivity[];
@@ -49,9 +53,18 @@ export interface AgentStream {
   segments: TurnSegment[];
   error: string | null;
   send: (message: string) => Promise<void>;
-  stop: () => void;
+  /** Rejoin a turn that is already running, after a reload or in a second tab. */
+  resume: () => Promise<void>;
+  stop: () => Promise<void>;
   dismissError: () => void;
 }
+
+/**
+ * How long to wait for a stopped turn to end itself before dropping the
+ * connection. A tool already executing is allowed to finish, so the wait is
+ * bounded by that, not by the model.
+ */
+const STOP_GRACE_MS = 15_000;
 
 /**
  * One piece of a turn, in the order it happened.
@@ -89,8 +102,10 @@ export function useAgentStream(
   const [activities, setActivities] = useState<ToolActivity[]>([]);
   const [segments, setSegments] = useState<TurnSegment[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [stopping, setStopping] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
+  const stopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Read inside the stream loop without making `send` depend on render state.
   const textRef = useRef("");
   const activitiesRef = useRef<ToolActivity[]>([]);
@@ -195,6 +210,10 @@ export function useAgentStream(
         }));
         break;
 
+      case "preview_ready":
+        callbacksRef.current.onPreviewReady({ port: event.port, url: event.url });
+        break;
+
       case "workspace_changed":
         callbacksRef.current.onWorkspaceChanged();
         break;
@@ -233,17 +252,51 @@ export function useAgentStream(
     }
   }, [reset]);
 
-  const send = useCallback(
-    async (message: string) => {
-      if (streaming) return;
-
+  /**
+   * Read one turn to its end, from whichever connection opened it.
+   *
+   * Starting a turn and rejoining one differ only in how the stream is opened.
+   * Everything after that — the events, the completion, the teardown — has to
+   * behave identically, so it lives here once rather than in two places that
+   * drift.
+   */
+  const consume = useCallback(
+    async (open: (signal: AbortSignal) => Promise<Response>) => {
       const controller = new AbortController();
       abortRef.current = controller;
       reset();
       setError(null);
+      setStopping(false);
       setStreaming(true);
 
       try {
+        const response = await open(controller.signal);
+        if (!response.body) return;
+        await readEventStream(response.body, applyEvent);
+      } catch (cause) {
+        if (controller.signal.aborted) {
+          setError("Turn stopped.");
+        } else {
+          setError(
+            cause instanceof Error ? cause.message : "Something went wrong.",
+          );
+        }
+      } finally {
+        if (stopTimerRef.current) clearTimeout(stopTimerRef.current);
+        stopTimerRef.current = null;
+        setStreaming(false);
+        setStopping(false);
+        abortRef.current = null;
+      }
+    },
+    [applyEvent, reset],
+  );
+
+  const send = useCallback(
+    async (message: string) => {
+      if (streaming) return;
+
+      await consume(async (signal) => {
         const response = await fetch(api.messagesUrl(sessionId), {
           method: "POST",
           headers: {
@@ -255,7 +308,7 @@ export function useAgentStream(
           // session cookie, so the Worker knows whose session to run.
           credentials: "include",
           body: JSON.stringify({ message }),
-          signal: controller.signal,
+          signal,
         });
 
         if (!response.ok || !response.body) {
@@ -266,38 +319,68 @@ export function useAgentStream(
               : `The agent could not start (status ${response.status}).`,
           );
         }
-
-        await readEventStream(response.body, applyEvent);
-      } catch (cause) {
-        if (controller.signal.aborted) {
-          setError("Turn stopped.");
-        } else {
-          setError(
-            cause instanceof Error ? cause.message : "Something went wrong.",
-          );
-        }
-      } finally {
-        setStreaming(false);
-        abortRef.current = null;
-      }
+        return response;
+      });
     },
-    [applyEvent, reset, sessionId, streaming],
+    [consume, sessionId, streaming],
   );
 
-  const stop = useCallback(() => {
-    abortRef.current?.abort();
-  }, []);
+  /**
+   * Pick a running turn back up.
+   *
+   * The turn lives in the session object, not in the request that started it,
+   * so closing the tab never stopped it — it only stopped anyone watching. The
+   * server replays what has happened before streaming the rest, which is why
+   * this can render a turn it did not start.
+   */
+  const resume = useCallback(async () => {
+    if (streaming) return;
+
+    await consume(async (signal) => {
+      const response = await fetch(api.streamUrl(sessionId), {
+        headers: {
+          ...(readSessionToken() ? { Authorization: `Bearer ${readSessionToken()}` } : {}),
+        },
+        credentials: "include",
+        signal,
+      });
+      // Nothing to rejoin is the ordinary case, not an error worth showing.
+      if (!response.ok) throw new Error("That turn has already finished.");
+      return response;
+    });
+  }, [consume, sessionId, streaming]);
+
+  const stop = useCallback(async () => {
+    if (!abortRef.current) return;
+    setStopping(true);
+
+    // The last resort, for a turn parked inside a long-running tool. Hanging up
+    // is worse than waiting, so it is a fallback and not the mechanism.
+    stopTimerRef.current = setTimeout(() => {
+      abortRef.current?.abort();
+    }, STOP_GRACE_MS);
+
+    try {
+      const { stopping: accepted } = await api.stopTurn(sessionId);
+      // Nothing was running on the server, so there is nothing to wait for.
+      if (!accepted) abortRef.current?.abort();
+    } catch {
+      abortRef.current?.abort();
+    }
+  }, [sessionId]);
 
   const dismissError = useCallback(() => setError(null), []);
 
   return {
     streaming,
+    stopping,
     assistantText,
     thinkingText,
     activities,
     segments,
     error,
     send,
+    resume,
     stop,
     dismissError,
   };

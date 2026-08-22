@@ -34,6 +34,14 @@ export interface SandboxOptions {
 	sessionId?: string;
 	/** Reuse an existing Daytona sandbox, if one was already created. */
 	sandboxId?: string;
+	/**
+	 * Keep the container past the end of the turn.
+	 *
+	 * The provider reaps an idle sandbox on its own schedule, and the default is
+	 * short enough that a container meant to survive between messages is gone
+	 * before the next one arrives — which makes "always on" untrue.
+	 */
+	keepWarm?: boolean;
 	onSandboxCreated?: (sandboxId: string) => void | Promise<void>;
 }
 
@@ -66,7 +74,9 @@ export function createSandbox(env: Env, options: SandboxOptions = {}): SandboxPr
 			target: env.DAYTONA_TARGET || 'us',
 			snapshot: env.DAYTONA_SNAPSHOT || undefined,
 			organizationId: env.DAYTONA_ORG_ID || undefined,
-			autoStopMinutes: Math.max(1, Number(env.SANDBOX_IDLE_MINUTES ?? 5) || 5),
+			autoStopMinutes: options.keepWarm
+				? Math.max(1, Number(env.SANDBOX_WARM_IDLE_MINUTES ?? 30) || 30)
+				: Math.max(1, Number(env.SANDBOX_IDLE_MINUTES ?? 5) || 5),
 			sandboxId: options.sandboxId,
 			onSandboxCreated: options.onSandboxCreated,
 		});

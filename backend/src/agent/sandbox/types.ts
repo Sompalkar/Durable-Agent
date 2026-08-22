@@ -68,6 +68,12 @@ export interface RunOptions {
 	 * nobody watching, and paying for extra round trips to nobody is waste.
 	 */
 	onOutput?: (chunk: string) => void;
+	/**
+	 * Output budget in characters. The default keeps a runaway command from
+	 * filling a turn; raise it when the output is read by code rather than by
+	 * the model — a screenshot clipped mid-base64 is not shorter, it is broken.
+	 */
+	maxOutputChars?: number;
 }
 
 export interface SandboxProvider {
@@ -79,6 +85,14 @@ export interface SandboxProvider {
 	 * changed on disk.
 	 */
 	run(options: RunOptions): Promise<CommandResult>;
+
+	/**
+	 * A public URL for something listening on `port` inside the sandbox.
+	 *
+	 * Optional: not every provider can expose a port. Returns null when this one
+	 * cannot, or when no sandbox is running yet.
+	 */
+	previewUrl?(port: number, expiresInSeconds: number): Promise<string | null>;
 
 	/** Tear the sandbox down. Best-effort; never throws. */
 	dispose(): Promise<void>;

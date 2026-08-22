@@ -20,6 +20,9 @@ import { readSessionToken, writeSessionToken } from "./session-token";
 import type {
   AccountUsage,
   AttachedRepo,
+  BrowserAction,
+  BrowserView,
+  DesktopInfo,
   CommandRecord,
   GitHubIssueOption,
   GitHubRepoOption,
@@ -36,7 +39,9 @@ import type {
   Schedule,
   ScheduleActivity,
   ScheduledRun,
+  SandboxStatus,
   SessionListItem,
+  SessionPreview,
   SessionSummary,
   Skill,
   TranscriptMessage,
@@ -298,10 +303,10 @@ export const api = {
     return request("/api/sessions/models");
   },
 
-  /** Switch the model or effort a session runs on. */
+  /** Switch the model, effort or runtime a session runs on. */
   configureSession(
     id: string,
-    next: { model?: string; effort?: string },
+    next: { model?: string; effort?: string; runtime?: string },
   ): Promise<{ session: SessionSummary }> {
     return request(`/api/sessions/${id}`, {
       method: "PATCH",
@@ -511,8 +516,69 @@ export const api = {
     return request(`/api/schedules/${id}/run`, { method: "POST" });
   },
 
+  browserAction(id: string, action: BrowserAction): Promise<BrowserView> {
+    return request(`/api/sessions/${id}/browser`, {
+      method: "POST",
+      body: JSON.stringify(action),
+    });
+  },
+
+  desktop(id: string): Promise<DesktopInfo> {
+    return request(`/api/sessions/${id}/desktop`);
+  },
+
+  /** Starts the desktop, optionally opening a URL on it. */
+  startDesktop(id: string, url?: string): Promise<DesktopInfo> {
+    return request(`/api/sessions/${id}/desktop`, {
+      method: "POST",
+      body: JSON.stringify(url ? { url } : {}),
+    });
+  },
+
+  stopDesktop(id: string): Promise<{ stopped: boolean }> {
+    return request(`/api/sessions/${id}/desktop`, { method: "DELETE" });
+  },
+
+  // --------------------------------------------------------------- sandbox
+
+  sandboxStatus(id: string): Promise<SandboxStatus> {
+    return request(`/api/sessions/${id}/sandbox`);
+  },
+
+  stopSandbox(id: string): Promise<{ stopped: boolean }> {
+    return request(`/api/sessions/${id}/sandbox`, { method: "DELETE" });
+  },
+
+  stopSandboxProcess(id: string, name: string): Promise<{ stopped: boolean }> {
+    return request(`/api/sessions/${id}/sandbox/processes/${encodeURIComponent(name)}`, {
+      method: "DELETE",
+    });
+  },
+
+  sandboxPreview(id: string, port: number): Promise<{ preview: SessionPreview }> {
+    return request(`/api/sessions/${id}/sandbox/preview`, {
+      method: "POST",
+      body: JSON.stringify({ port }),
+    });
+  },
+
+  /** Ask the running turn to wind up at its next safe point. */
+  stopTurn(id: string): Promise<{ stopping: boolean }> {
+    return request(`/api/sessions/${id}/stop`, { method: "POST" });
+  },
+
   /** URL for the streaming turn endpoint, consumed by `useAgentStream`. */
   messagesUrl(id: string): string {
     return `${BASE_URL}/api/sessions/${id}/messages`;
+  },
+
+  /** URL for attaching to a turn already in flight. */
+  streamUrl(id: string): string {
+    return `${BASE_URL}/api/sessions/${id}/stream`;
+  },
+
+  /** URL for the interactive shell, consumed by `useShell`. */
+  shellUrl(id: string): string {
+    return `${BASE_URL}/api/sessions/${id}/shell`;
   },
 };
